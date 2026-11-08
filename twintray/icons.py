@@ -72,14 +72,12 @@ def mask_surface() -> cairo.ImageSurface:
 def _scaled_mask(size: int) -> cairo.ImageSurface:
     """The mask fitted into a `size` square, **preserving aspect**, cached.
 
-    The logo is portrait (307x512, aspect 0.6). Scaling it to fill a square
-    stretches it and the glyph turns into a smear — which is exactly what went
-    wrong before. It is scaled by *height* to fit and centred horizontally, so
-    the shape is always the shape.
+    The logo is portrait (307x512, aspect 0.6), so it is scaled to fit by
+    height and centred. Filling the square instead stretches it and the glyph
+    turns into a smear.
 
-    No alpha boost: the source is a clean 512px-tall RGBA with proper
-    antialiasing, so downsampling to bar size keeps honest coverage. The gamma
-    hack that lived here was compensating for a low-resolution JPEG source.
+    No alpha boost: the source is a clean 512px RGBA with real antialiasing,
+    so downsampling keeps honest coverage.
     """
     cached = _scaled_cache.get(size)
     if cached is None:
@@ -127,11 +125,12 @@ def tray_surface(state: str, size: int = 22) -> cairo.ImageSurface:
     return surface
 
 
-def plate_surface(state: str = ONLINE, size: int = 128) -> cairo.ImageSurface:
+def plate_surface(size: int = 128) -> cairo.ImageSurface:
     """The launcher icon: glyph on a rounded near-black plate.
 
-    Deliberately not state-coloured — an app-menu icon is an identity, and it
-    must not look like a different application depending on connection state.
+    Deliberately has no state parameter. An app-menu icon is an identity, and
+    it must not look like a different application depending on whether the
+    tunnel is up.
     """
     surface, cr = _surface(size)
     radius = size * 0.22

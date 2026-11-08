@@ -108,11 +108,19 @@ def cmd_icon_probe(args) -> int:
     from . import icons
 
     out = Path(args.outdir)
-    states = [core.ONLINE, core.AUTHENTICATING, core.OFFLINE, core.DISCONNECTED, core.ERROR, core.STOPPED]
+    states = [
+        core.ONLINE,
+        core.AUTHENTICATING,
+        core.OFFLINE,
+        core.DISCONNECTED,
+        core.ERROR,
+        core.STOPPED,
+    ]
     for state in states:
         icons.write_png(icons.tray_surface(state, 22), out / f"tray-{state}.png")
-        icons.write_png(icons.plate_surface(state, 128), out / f"plate-{state}.png")
-    print(f"Wrote {len(states) * 2} PNGs to {out}")
+    # One plate, not one per state: it carries identity, not status.
+    icons.write_png(icons.plate_surface(128), out / "plate.png")
+    print(f"Wrote {len(states) + 1} PNGs to {out}")
     return 0
 
 

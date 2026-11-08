@@ -471,12 +471,5 @@ def test_pixmap_is_always_tightly_packed():
 
 def test_plates_differ_from_tray_rendering():
     tray = icons.surface_to_pixmap(icons.tray_surface(icons.ONLINE, 48))[2]
-    plate = icons.surface_to_pixmap(icons.plate_surface(icons.ONLINE, 48))[2]
+    plate = icons.surface_to_pixmap(icons.plate_surface(48))[2]
     assert tray != plate
-
-
-def test_plate_is_state_independent():
-    """An app-menu icon is an identity, not a status readout."""
-    a = icons.surface_to_pixmap(icons.plate_surface(icons.ONLINE, 48))[2]
-    b = icons.surface_to_pixmap(icons.plate_surface(icons.STOPPED, 48))[2]
-    assert a == b

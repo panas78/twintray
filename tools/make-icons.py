@@ -25,7 +25,7 @@ def main() -> int:
     out = ROOT / "data" / "icons" / "hicolor"
     for size in SIZES:
         target = out / f"{size}x{size}" / "apps" / "twintray.png"
-        icons.write_png(icons.plate_surface(icons.ONLINE, size), target)
+        icons.write_png(icons.plate_surface(size), target)
         print(f"  {target.relative_to(ROOT)}")
     print(f"Wrote {len(SIZES)} sizes.")
     return 0
