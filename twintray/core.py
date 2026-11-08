@@ -249,8 +249,21 @@ class ResourceList:
         return ", ".join(statuses)
 
 
-_HEADER_FIRST_COLUMNS = {"resource name", "main resources", "background resources"}
 _HEADER_LINES = {"resource name", "main resources", "background resources", "resources"}
+
+
+def _is_header(line: str) -> bool:
+    """True for a column-header or section-title row, never for a resource.
+
+    Matched on the **whole line** with whitespace collapsed, before any column
+    splitting: a tab-header collapses to "resource name address alias auth
+    status", while a header with no tab and no wide gap would otherwise split
+    into "RESOURCE"/"NAME" and slip past a first-column test.
+    """
+    probe = " ".join(line.split()).lower()
+    return probe in _HEADER_LINES or (
+        probe.startswith("resource name ") and "address" in probe
+    )
 
 
 def _column(columns: list[str], index: int) -> str:
@@ -276,16 +289,7 @@ def parse_resources(text: str) -> list[Resource]:
     """
     items: list[Resource] = []
     for line in (text or "").splitlines():
-        if not line.strip():
-            continue
-
-        # Detect the header on the whole line before splitting. With no tab and
-        # no wide gap, "RESOURCE NAME" would otherwise split into two columns
-        # ("RESOURCE" / "NAME") and slip past a first-column check.
-        probe = " ".join(line.split()).lower()
-        if probe in _HEADER_LINES:
-            continue
-        if probe.startswith("resource name ") and "address" in probe:
+        if not line.strip() or _is_header(line):
             continue
 
         if "\t" in line:
@@ -297,9 +301,7 @@ def parse_resources(text: str) -> list[Resource]:
                 parts = columns[0].split(None, 1)
                 if len(parts) == 2:
                     columns = parts
-        if not columns or not columns[0]:
-            continue
-        if columns[0].lower() in _HEADER_FIRST_COLUMNS:
+        if not columns[0]:
             continue
 
         items.append(
