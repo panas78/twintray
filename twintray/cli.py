@@ -145,8 +145,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = sub.add_parser("status", help="Show connection state")
     status.add_argument("--json", action="store_true", help="Machine-readable output")
-    status.add_argument("-b", "--brief", action="store_true", help="Skip the verbose detail lines")
-    status.set_defaults(func=cmd_status)
+    # Both spellings: `-v/--verbose` is what `twingate status` uses, so it is
+    # what fingers type; `--brief` is the same axis read the other way.
+    status.add_argument(
+        "-v", "--verbose", dest="brief", action="store_false",
+        help="Include the detail lines (the default)",
+    )
+    status.add_argument(
+        "-b", "--brief", dest="brief", action="store_true",
+        help="Print the state only",
+    )
+    status.set_defaults(func=cmd_status, brief=False)
 
     resources = sub.add_parser("resources", help="List authorized resources")
     resources.add_argument("--json", action="store_true")
