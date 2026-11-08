@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from twintray import cli, core
 
 
@@ -32,6 +34,26 @@ def test_status_json_shape(monkeypatch, capsys):
 def test_status_unknown_exits_nonzero(monkeypatch, capsys):
     monkeypatch.setattr(core, "status", lambda verbose=True: core.Status(state=core.UNKNOWN))
     assert cli.main(["status"]) == 1
+
+
+@pytest.mark.parametrize(
+    "argv,expected",
+    [
+        (["status"], True),          # default: verbose
+        (["status", "-v"], True),    # twingate's own spelling
+        (["status", "--verbose"], True),
+        (["status", "-b"], False),   # brief
+        (["status", "--brief"], False),
+    ],
+)
+def test_status_verbosity_flags(monkeypatch, argv, expected):
+    """`-v` is what fingers type, having been trained by `twingate status -v`."""
+    seen = {}
+    monkeypatch.setattr(
+        core, "status", lambda verbose=True: seen.update(v=verbose) or core.Status(state=core.ONLINE)
+    )
+    assert cli.main(argv) == 0
+    assert seen["v"] is expected, argv
 
 
 def test_resources_prints_aligned_rows(monkeypatch, capsys):
