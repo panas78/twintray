@@ -110,10 +110,10 @@ themselves with no display; run them on a desktop or they prove nothing.
   here makes the host draw that glyph and ignore the pixmap entirely.
 - `Status` is always `Active`. Noctalia hides `Passive` items, and "disconnected"
   is exactly when a VPN icon must stay clickable.
-- The logo is an alpha mask, tinted in cairo at draw time, so one asset covers
-  every state. Its strokes are thin and land on sub-pixel widths at 22 px, so
-  the resampled mask gets an alpha gamma of 0.7 — a hinting trick, not a colour
-  change, or the icon reads as washed out in the bar.
+- The logo ships as a transparent RGBA PNG and is used as an alpha mask, tinted
+  in cairo at draw time, so one asset covers every state. It is portrait
+  (307x512), so it is **fitted by height and centred**, never stretched to fill
+  the square — stretching turns the glyph into a smear.
 - White on a **light** bar is invisible. The default assumes a dark bar; on a
   light theme, drop `STATE_COLORS[STOPPED]` to a mid grey.
 - Closing the window hides it. Quit is an explicit menu item.

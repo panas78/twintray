@@ -401,7 +401,46 @@ def test_there_is_no_state_dot_any_more():
 def test_the_logo_mask_exists_and_has_coverage():
     assert icons.MASK_PATH.exists(), f"missing {icons.MASK_PATH}"
     surface = icons.mask_surface()
-    assert surface.get_width() == surface.get_height()
+    # The asset is portrait (307x512). Assert it actually has a glyph with
+    # transparent surroundings rather than being square — the shape of the
+    # source is not something this test should pin.
+    surface.flush()
+    data = bytes(surface.get_data())
+    stride = surface.get_stride()
+    alphas = [
+        data[y * stride + x * 4 + 3]
+        for y in range(surface.get_height())
+        for x in range(surface.get_width())
+    ]
+    assert max(alphas) > 200, "mask has no opaque pixels"
+    assert min(alphas) == 0, "mask has no transparent pixels — no shape to cut out"
+
+
+def test_the_mask_is_scaled_without_distortion():
+    """A square mask would mean the portrait logo got stretched."""
+    for size in (16, 22, 32, 64):
+        scaled = icons._scaled_mask(size)
+        assert (scaled.get_width(), scaled.get_height()) == (size, size)
+        scaled.flush()
+        data = bytes(scaled.get_data())
+        stride = scaled.get_stride()
+        cols = [
+            x
+            for x in range(size)
+            for y in range(size)
+            if data[y * stride + x * 4 + 3] > 8
+        ]
+        rows = [
+            y
+            for y in range(size)
+            for x in range(size)
+            if data[y * stride + x * 4 + 3] > 8
+        ]
+        drawn_w = max(cols) - min(cols) + 1
+        drawn_h = max(rows) - min(rows) + 1
+        # Portrait: narrower than tall, and roughly the source aspect (0.6).
+        assert drawn_w < drawn_h, (size, drawn_w, drawn_h)
+        assert 0.45 < drawn_w / drawn_h < 0.75, (size, drawn_w / drawn_h)
 
 
 def test_unknown_state_renders_as_stopped():

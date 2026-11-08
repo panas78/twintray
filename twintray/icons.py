@@ -70,39 +70,31 @@ def mask_surface() -> cairo.ImageSurface:
 
 
 def _scaled_mask(size: int) -> cairo.ImageSurface:
-    """The mask resampled to `size` and stroke-hardened, cached per size.
+    """The mask fitted into a `size` square, **preserving aspect**, cached.
 
-    The logo's strokes are thin, and at 22 px they land on sub-pixel widths, so
-    resampling alone leaves them half-transparent and washed out on a bar. An
-    alpha gamma of 0.7 pushes partial coverage toward solid; it is a
-    small-size hinting trick, not a colour change, and at large sizes it only
-    touches the antialiased rim.
+    The logo is portrait (307x512, aspect 0.6). Scaling it to fill a square
+    stretches it and the glyph turns into a smear — which is exactly what went
+    wrong before. It is scaled by *height* to fit and centred horizontally, so
+    the shape is always the shape.
 
-    Only alpha is rewritten: this surface is ever used as a *mask* (alpha is the
-    coverage) and never painted, so leaving RGB premultiplied by the pre-boost
-    values is harmless here.
+    No alpha boost: the source is a clean 512px-tall RGBA with proper
+    antialiasing, so downsampling to bar size keeps honest coverage. The gamma
+    hack that lived here was compensating for a low-resolution JPEG source.
     """
     cached = _scaled_cache.get(size)
     if cached is None:
         source = mask_surface()
+        sw, sh = source.get_width(), source.get_height()
+        scale = size / max(sw, sh)
+        w, h = max(1, round(sw * scale)), max(1, round(sh * scale))
+
         cached = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
         cr = cairo.Context(cached)
-        cr.scale(size / source.get_width(), size / source.get_height())
+        cr.translate((size - w) / 2.0, (size - h) / 2.0)
+        cr.scale(w / sw, h / sh)
         cr.set_source_surface(source, 0, 0)
         cr.get_source().set_filter(cairo.FILTER_BEST)
         cr.paint()
-        cached.flush()
-
-        data = cached.get_data()
-        stride = cached.get_stride()
-        for row in range(size):
-            base = row * stride
-            for col in range(size):
-                offset = base + col * 4 + 3
-                alpha = data[offset]
-                if 0 < alpha < 255:
-                    data[offset] = min(255, int(round(255 * (alpha / 255.0) ** 0.7)))
-        cached.mark_dirty()
         cached.flush()
         _scaled_cache[size] = cached
     return cached
