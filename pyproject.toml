@@ -1,0 +1,31 @@
+[project]
+name = "twintray"
+version = "0.1.0"
+description = "System tray app for the Twingate client on Linux"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+# PyGObject is deliberately NOT a dependency.
+#
+# `gi` is a binding over system shared libraries (gtk4, libadwaita, cairo) and
+# must come from the distro — `python3-gobject python3-cairo gtk4 libadwaita`.
+# A pip-installed PyGObject inside a venv routinely cannot see the typelibs and
+# fails with `ModuleNotFoundError: No module named 'gi'` even though the distro
+# package is installed. Keep this empty; it is not an oversight.
+dependencies = []
+
+[project.scripts]
+twintray = "twintray.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["twintray"]
+
+[tool.pytest.ini_options]
+# No `addopts = "-q"` here on purpose: `pytest -q` on top of it becomes `-qq`,
+# which suppresses the "N passed" summary and makes a green run look like an
+# empty collection.
+testpaths = ["tests"]

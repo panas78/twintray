@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=TwinTray
+GenericName=Twingate Client
+Comment=Twingate status and connection in the system tray
+Exec=@BINDIR@/twintray window
+TryExec=@BINDIR@/twintray
+Icon=twintray
+Terminal=false
+StartupNotify=true
+StartupWMClass=io.github.panas78.Twintray
+Categories=Network;RemoteAccess;
+Keywords=twingate;vpn;tray;connect;tunnel;

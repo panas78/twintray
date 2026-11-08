@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.panas78.Twintray</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>TwinTray</name>
+  <summary>Twingate status and connection in the system tray</summary>
+  <description>
+    <p>
+      TwinTray is a system tray front-end for the Twingate client on Linux.
+      It shows the current tunnel state at a glance, starts and stops the
+      Twingate service without a password prompt, and lists the resources the
+      client is authorized for.
+    </p>
+    <p>
+      Because Twingate and Tailscale both claim 100.96.12.0/12, TwinTray can
+      stand Tailscale down while Twingate is up and bring it back afterwards.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.panas78.Twintray.desktop</launchable>
+  <url type="homepage">https://github.com/panas78/twintray</url>
+  <provides>
+    <binary>twintray</binary>
+  </provides>
+  <releases>
+    <release version="0.1.0" date="2026-11-08"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>
