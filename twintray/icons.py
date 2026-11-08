@@ -109,18 +109,14 @@ def _surface(size: int):
 
 
 def canonical(state: str) -> str:
-    """Resolve an unknown state once, then read everything from that one key."""
+    """Map any unknown state onto `STOPPED`, so every lookup below is total."""
     return state if state in STATE_COLORS else STOPPED
-
-
-def state_color(state: str):
-    return STATE_COLORS[canonical(state)]
 
 
 def tray_surface(state: str, size: int = 22) -> cairo.ImageSurface:
     """The bar icon: the glyph alone, tinted by state, no dot."""
     surface, cr = _surface(size)
-    _paint_glyph(cr, size, state_color(state))
+    _paint_glyph(cr, size, STATE_COLORS[canonical(state)])
     surface.flush()
     return surface
 
