@@ -116,8 +116,14 @@ class Status:
         }
 
 
+# `twingate status` prints one word ("online") and `-v` prints one line
+# ("Online: User"). It never contains the network name or an auth expiry —
+# those regexes existed on a guess and could never match in practice.
 _NETWORK_RE = re.compile(r"connected to\s+(.+?)\s*$", re.IGNORECASE)
 _EXPIRES_RE = re.compile(r"auth(?:entication)?\s+expires\s+in\s+(.+)", re.IGNORECASE)
+
+# World-readable and present whether or not the daemon is up.
+NETWORK_CONF = "/etc/twingate/network.conf"
 
 
 def parse_status(text: str) -> str:
@@ -137,6 +143,25 @@ def parse_status(text: str) -> str:
             if lowered.startswith(candidate):
                 return candidate
     return UNKNOWN
+
+
+def network_name() -> str:
+    """The Twingate network slug, read from the client's own config.
+
+    `twingate status -v` does not report it, and `/var/lib/twingate` (where the
+    real state lives) is root-only. `network.conf` is world-readable, holds one
+    line, and is present whether or not the daemon is running — so the UI can
+    name the network even while disconnected.
+    """
+    try:
+        with open(NETWORK_CONF, encoding="utf-8") as handle:
+            for line in handle:
+                value = line.strip()
+                if value:
+                    return value
+    except OSError:
+        pass
+    return ""
 
 
 def status(verbose: bool = True) -> Status:
@@ -163,6 +188,11 @@ def status(verbose: bool = True) -> Status:
             match = _EXPIRES_RE.search(line)
             if match:
                 detail.auth_expires = match.group(1)
+
+    # Neither of the above fires against the current client, so fall back to the
+    # config file rather than showing a dash forever.
+    if not detail.network:
+        detail.network = network_name()
     return detail
 
 
@@ -173,10 +203,17 @@ def status(verbose: bool = True) -> Status:
 class Resource:
     name: str
     address: str = ""
+    alias: str = ""
+    auth_status: str = ""
     raw: str = ""
 
     def to_dict(self) -> dict:
-        return {"name": self.name, "address": self.address}
+        return {
+            "name": self.name,
+            "address": self.address,
+            "alias": self.alias,
+            "auth_status": self.auth_status,
+        }
 
 
 @dataclass
@@ -189,29 +226,90 @@ class ResourceList:
         return {
             "items": [i.to_dict() for i in self.items],
             "count": len(self.items),
+            "auth": self.auth_summary,
             "error": self.error,
         }
+
+    @property
+    def auth_summary(self) -> str:
+        """What the client says about per-resource authorization.
+
+        The CLI exposes no global SSO expiry — `twingate status -v` prints only
+        "Online: User" — so the only real authorization signal is the AUTH
+        STATUS column of `twingate resources`. Render what it actually says
+        instead of a permanent dash.
+        """
+        if self.error:
+            return self.error
+        if not self.items:
+            return "no resources"
+        statuses = sorted({r.auth_status for r in self.items if r.auth_status})
+        if not statuses:
+            return "not required by any resource"
+        return ", ".join(statuses)
+
+
+_HEADER_FIRST_COLUMNS = {"resource name", "main resources", "background resources"}
+_HEADER_LINES = {"resource name", "main resources", "background resources", "resources"}
+
+
+def _column(columns: list[str], index: int) -> str:
+    """Read one column positionally, treating the CLI's "-" as "no value"."""
+    if index >= len(columns):
+        return ""
+    value = columns[index]
+    return "" if value == "-" else value
 
 
 def parse_resources(text: str) -> list[Resource]:
     """Turn `twingate resources` into rows.
 
-    The CLI prints an aligned two-column table. Column gaps are two or more
-    spaces, so splitting on whitespace alone would destroy any name containing
-    a space — split on the gap first and fall back to whitespace.
+    The real output is **tab-separated with a header row**:
+
+        RESOURCE NAME         \\tADDRESS       \\tALIAS\\tAUTH STATUS
+        *.diastasys.gr        \\t*.diastasys.gr\\t-    \\t
+
+    So split on tabs first. Splitting on runs of whitespace (the previous
+    approach) kept the header as a resource named "RESOURCE NAME" and glued the
+    alias onto the address. Whitespace splitting stays as a fallback for a
+    future format change, with the header filter applying to both.
     """
     items: list[Resource] = []
     for line in (text or "").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+        if not line.strip():
             continue
-        columns = [c.strip() for c in re.split(r"\s{2,}", stripped) if c.strip()]
-        if len(columns) >= 2:
-            items.append(Resource(name=columns[0], address=columns[1], raw=stripped))
+
+        # Detect the header on the whole line before splitting. With no tab and
+        # no wide gap, "RESOURCE NAME" would otherwise split into two columns
+        # ("RESOURCE" / "NAME") and slip past a first-column check.
+        probe = " ".join(line.split()).lower()
+        if probe in _HEADER_LINES:
             continue
-        parts = stripped.split(None, 1)
+        if probe.startswith("resource name ") and "address" in probe:
+            continue
+
+        if "\t" in line:
+            columns = [c.strip() for c in line.split("\t")]
+        else:
+            columns = [c.strip() for c in re.split(r"\s{2,}", line.strip())]
+            # A line with no tab and no wide gap still carries two fields.
+            if len(columns) == 1:
+                parts = columns[0].split(None, 1)
+                if len(parts) == 2:
+                    columns = parts
+        if not columns or not columns[0]:
+            continue
+        if columns[0].lower() in _HEADER_FIRST_COLUMNS:
+            continue
+
         items.append(
-            Resource(name=parts[0], address=parts[1] if len(parts) > 1 else "", raw=stripped)
+            Resource(
+                name=columns[0],
+                address=_column(columns, 1),
+                alias=_column(columns, 2),
+                auth_status=_column(columns, 3),
+                raw=line.rstrip(),
+            )
         )
     return items
 

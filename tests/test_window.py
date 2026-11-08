@@ -252,3 +252,75 @@ def test_closing_hides_instead_of_quitting(window):
     win.set_visible(True)
     assert win._on_close_request(win) is True
     assert win.get_visible() is False
+
+
+def test_network_and_auth_rows_never_show_a_bare_dash(window):
+    """The reported bug: both rows read "—" permanently.
+
+    Network was parsed from a line `twingate status -v` never prints, and
+    Authentication from an expiry it never reports, so neither regex could ever
+    match. Whatever the state, neither row may end up as a lone dash.
+    """
+    win, controller = window
+    for state in (core.ONLINE, core.STOPPED, core.UNKNOWN):
+        controller.status = core.Status(state=state, network="diastasys")
+        controller.resources = core.ResourceList(items=[])
+        win.update(controller.status)
+        assert win._network_row.get_subtitle() == "diastasys", state
+        assert win._auth_row.get_subtitle() != "—", state
+        assert win._auth_row.get_subtitle().strip(), state
+
+
+def test_network_row_says_not_configured_rather_than_a_dash(window):
+    win, controller = window
+    controller.status = core.Status(state=core.ONLINE, network="")
+    win.update(controller.status)
+    assert win._network_row.get_subtitle() == "not configured"
+
+
+def test_auth_row_reports_resource_authorization_when_live(window):
+    win, controller = window
+    controller.status = core.Status(state=core.ONLINE, network="diastasys")
+    controller.resources = core.ResourceList(
+        items=[core.Resource("a", "1", auth_status="Auth expires in 6 days")]
+    )
+    win.update(controller.status)
+    assert win._auth_row.get_subtitle() == "Auth expires in 6 days"
+
+    controller.resources = core.ResourceList(items=[core.Resource("a", "1")])
+    win.update(controller.status)
+    assert win._auth_row.get_subtitle() == "not required by any resource"
+
+
+def test_auth_row_prefers_a_session_expiry_when_one_is_reported(window):
+    win, controller = window
+    controller.status = core.Status(
+        state=core.ONLINE, network="diastasys", auth_expires="6 days"
+    )
+    controller.resources = core.ResourceList(items=[core.Resource("a", "1")])
+    win.update(controller.status)
+    assert win._auth_row.get_subtitle() == "6 days"
+
+
+def test_auth_row_explains_itself_while_stopped(window):
+    win, controller = window
+    controller.status = core.Status(state=core.STOPPED, network="diastasys")
+    controller.resources = core.ResourceList()
+    win.update(controller.status)
+    assert "connect" in win._auth_row.get_subtitle().lower()
+
+
+def test_resources_loaded_after_status_also_refresh_the_auth_row(window):
+    """Resources arrive in their own thread, later than status."""
+    win, controller = window
+    controller.status = core.Status(state=core.ONLINE, network="diastasys")
+    controller.resources = core.ResourceList()
+    win.update(controller.status)
+    before = win._auth_row.get_subtitle()
+
+    controller.resources = core.ResourceList(
+        items=[core.Resource("a", "1", auth_status="Auth expires in 2 days")]
+    )
+    win.update_resources(controller.resources)
+    assert win._auth_row.get_subtitle() == "Auth expires in 2 days"
+    assert win._auth_row.get_subtitle() != before

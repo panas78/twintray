@@ -49,14 +49,49 @@ def test_only_online_counts_as_live():
 # -------------------------------------------------------------- resource parsing
 
 
-def test_resources_split_on_column_gap_keeps_spaces_in_names():
-    text = "BC Prod Server      10.0.0.5\nNAS                 10.0.0.9\n"
+# Captured verbatim from `twingate resources -d` on Twingate 2026.302.7126.
+# Tab-separated, four columns, header row, "-" meaning "no alias".
+REAL_RESOURCES = (
+    "RESOURCE NAME         \tADDRESS       \tALIAS\tAUTH STATUS\n"
+    "*.diastasys.gr        \t*.diastasys.gr\t-    \t\n"
+    "Diastasys Internal LAN\t10.10.0.0/24  \t-    \t\n"
+    "\n"
+)
+
+
+def test_real_output_parses_without_the_header():
+    items = core.parse_resources(REAL_RESOURCES)
+    assert [i.name for i in items] == ["*.diastasys.gr", "Diastasys Internal LAN"]
+    assert [i.address for i in items] == ["*.diastasys.gr", "10.10.0.0/24"]
+    # "-" is the CLI's "none", not an alias called dash.
+    assert [i.alias for i in items] == ["", ""]
+
+
+def test_header_rows_are_never_resources():
+    # The previous parser split on 2+ spaces, so this header became a resource
+    # named "RESOURCE NAME" and glued ALIAS onto the address.
+    for header in ("RESOURCE NAME", "MAIN RESOURCES", "BACKGROUND RESOURCES"):
+        assert core.parse_resources(header + "\n") == [], header
+
+
+def test_auth_status_column_is_captured():
+    text = (
+        "RESOURCE NAME\tADDRESS\tALIAS\tAUTH STATUS\n"
+        "BC Prod\t10.0.0.5\t-\tAuth expires in 6 days\n"
+        "NAS\t10.0.0.9\t-\t\n"
+    )
     items = core.parse_resources(text)
-    assert [i.name for i in items] == ["BC Prod Server", "NAS"]
-    assert [i.address for i in items] == ["10.0.0.5", "10.0.0.9"]
+    assert items[0].auth_status == "Auth expires in 6 days"
+    assert items[1].auth_status == ""
 
 
-def test_resources_fall_back_to_whitespace_when_ungapped():
+def test_names_keep_their_spaces():
+    # "Diastasys Internal LAN" is two words and one column.
+    items = core.parse_resources(REAL_RESOURCES)
+    assert any(i.name == "Diastasys Internal LAN" for i in items)
+
+
+def test_non_tab_fallback_still_parses_two_fields():
     items = core.parse_resources("router.internal 10.0.0.1\n")
     assert items[0].name == "router.internal"
     assert items[0].address == "10.0.0.1"
@@ -72,6 +107,22 @@ def test_name_without_address_is_still_a_row():
     assert items[0].address == ""
 
 
+def test_auth_summary_reports_what_the_client_says():
+    empty = core.ResourceList(items=core.parse_resources(REAL_RESOURCES))
+    assert empty.auth_summary == "not required by any resource"
+
+    pending = core.ResourceList(
+        items=[
+            core.Resource("a", "1", auth_status="Auth expires in 6 days"),
+            core.Resource("b", "2"),
+        ]
+    )
+    assert pending.auth_summary == "Auth expires in 6 days"
+
+    assert core.ResourceList().auth_summary == "no resources"
+    assert core.ResourceList(error="not connected").auth_summary == "not connected"
+
+
 # ----------------------------------------------------------------------- status
 
 
@@ -82,6 +133,30 @@ def test_status_captures_network_and_expiry(monkeypatch):
     assert current.state == core.ONLINE
     assert current.network == "diastasys"
     assert current.auth_expires == "6 days"
+    assert current.live is True
+
+
+def test_network_falls_back_to_the_client_config(monkeypatch, tmp_path):
+    """`status -v` prints only "Online: User" — it never names the network."""
+    conf = tmp_path / "network.conf"
+    conf.write_text("diastasys")
+    monkeypatch.setattr(core, "NETWORK_CONF", str(conf))
+    monkeypatch.setattr(core, "run", lambda *a, **k: core.Run(True, 0, "Online: User\n", ""))
+    assert core.status().network == "diastasys"
+
+
+def test_network_is_empty_when_the_config_is_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(core, "NETWORK_CONF", str(tmp_path / "absent.conf"))
+    monkeypatch.setattr(core, "run", lambda *a, **k: core.Run(True, 0, "online\n", ""))
+    assert core.status().network == ""
+
+
+def test_real_verbose_output_is_recognised(monkeypatch):
+    # Verbatim: the entire verbose output on this client version.
+    monkeypatch.setattr(core, "network_name", lambda: "diastasys")
+    monkeypatch.setattr(core, "run", lambda *a, **k: core.Run(True, 0, "Online: User\n", ""))
+    current = core.status()
+    assert current.state == core.ONLINE
     assert current.live is True
 
 

@@ -141,6 +141,7 @@ class TwinTrayApp(Adw.Application):
         self._timer_id = 0
         self._tray_available = False
         self._last_state = None
+        self._resources_requested = False
 
     # -------------------------------------------------------------- lifecycle
 
@@ -209,6 +210,23 @@ class TwinTrayApp(Adw.Application):
     def _after_poll(self, status: core.Status) -> None:
         self._sync_ui()
         self._notify_if_changed(status)
+        self._maybe_load_resources(status)
+
+    def _maybe_load_resources(self, status: core.Status) -> None:
+        """Fetch resources once per live session.
+
+        The Authentication row is fed by the resources list, so without this it
+        stays empty until the user finds the Refresh button. Kept off the poll
+        itself: `twingate resources` is a network call and must not sit in front
+        of a status update.
+        """
+        if not status.live:
+            self._resources_requested = False
+            return
+        if self._resources_requested:
+            return
+        self._resources_requested = True
+        self.controller.refresh_async(then=self._sync_ui)
 
     def _notify_if_changed(self, status: core.Status) -> None:
         previous, self._last_state = self._last_state, status.state

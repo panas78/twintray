@@ -276,8 +276,9 @@ class TwinTrayWindow(Adw.ApplicationWindow):
         )
         self._status_dot.queue_draw()
 
-        self._network_row.set_subtitle(status.network or "—")
-        self._auth_row.set_subtitle(status.auth_expires or "—")
+        self._network_row.set_subtitle(status.network or "not configured")
+        self._update_auth_row()
+
         active = self.controller.service_active
         self._service_row.set_subtitle("running" if active else "stopped")
 
@@ -298,6 +299,27 @@ class TwinTrayWindow(Adw.ApplicationWindow):
                 f"{ts_state}{' · managed by TwinTray' if coupled else ''}"
             )
 
+    def _update_auth_row(self) -> None:
+        """Authentication comes from two places, and neither is `status -v`.
+
+        A per-session expiry only appears if the client ever starts reporting
+        one; otherwise the honest source is the resources list's AUTH STATUS
+        column. While stopped there is nothing to report, so say that rather
+        than leaving a dash.
+        """
+        status = self.controller.status
+        listing = self.controller.resources
+
+        if status.auth_expires:
+            self._auth_row.set_subtitle(status.auth_expires)
+            return
+        if status.state in core.LIVE_STATES:
+            self._auth_row.set_subtitle(listing.auth_summary)
+        elif listing.items:
+            self._auth_row.set_subtitle("unavailable while stopped")
+        else:
+            self._auth_row.set_subtitle("not checked — connect to read it")
+
     def update_resources(self, listing: core.ResourceList) -> None:
         while child := self._resources_list.get_first_child():
             self._resources_list.remove(child)
@@ -308,12 +330,16 @@ class TwinTrayWindow(Adw.ApplicationWindow):
             self._resources_empty.set_title(
                 listing.error or "No resources — is the service running?"
             )
+            self._update_auth_row()
             return
         self._resources_empty.set_visible(False)
         for resource in items:
             row = Adw.ActionRow(title=resource.name, subtitle=resource.address or "—")
+            if resource.auth_status:
+                row.add_suffix(Gtk.Label(label=resource.auth_status))
             row.set_activatable(False)
             self._resources_list.append(row)
+        self._update_auth_row()
 
     def set_action_steps(self, steps: list[str]) -> None:
         self._action_steps.set_label("\n".join(steps))
