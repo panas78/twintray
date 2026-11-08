@@ -199,18 +199,18 @@ class TwinTrayWindow(Adw.ApplicationWindow):
         page = Adw.PreferencesPage()
         self._options_page = page
         self._syncing = False
-        self._auth_save_id = 0
         prefs = self.controller.prefs
 
         behaviour = Adw.PreferencesGroup(title="Behaviour")
 
-        self._auth_target_row = Adw.EntryRow(title="Auth target after connect")
-        self._auth_target_row.set_text(prefs.auth_target)
-        self._auth_target_row.set_tooltip_text(
-            "Resource pattern handed to `twingate auth` once the service is up. "
-            "Leave empty to skip."
-        )
-        self._auth_target_row.connect("changed", self._on_auth_target_changed)
+        # A dropdown, not a text field. The value has to match a resource name
+        # character-for-character (`*.diastasys.gr`, spaces and all), which is
+        # unreasonable to retype from the Resources tab — and only resources
+        # whose AUTH STATUS is non-empty can be authenticated at all, so the
+        # option list is exactly the ones that would do something.
+        self._auth_target_row = Adw.ComboRow(title="Authenticate on connect")
+        self._auth_names: list[str] = []
+        self._auth_target_row.connect("notify::selected", self._on_auth_target_selected)
         behaviour.add(self._auth_target_row)
 
         self._tailscale_switch = Adw.SwitchRow(
@@ -262,6 +262,7 @@ class TwinTrayWindow(Adw.ApplicationWindow):
         self._stack.add_titled_with_icon(
             page, "options", "Options", "emblem-system-symbolic"
         )
+        self._rebuild_auth_options()
 
     # ---------------------------------------------------------------- updating
 
@@ -331,6 +332,7 @@ class TwinTrayWindow(Adw.ApplicationWindow):
                 listing.error or "No resources — is the service running?"
             )
             self._update_auth_row()
+            self._rebuild_auth_options()
             return
         self._resources_empty.set_visible(False)
         for resource in items:
@@ -340,6 +342,8 @@ class TwinTrayWindow(Adw.ApplicationWindow):
             row.set_activatable(False)
             self._resources_list.append(row)
         self._update_auth_row()
+        # The dropdown's options come from this list, so it has to follow it.
+        self._rebuild_auth_options()
 
     def set_action_steps(self, steps: list[str]) -> None:
         self._action_steps.set_label("\n".join(steps))
@@ -349,21 +353,66 @@ class TwinTrayWindow(Adw.ApplicationWindow):
     def _on_toggle_clicked(self, _button) -> None:
         self.controller.toggle_async()
 
-    def _on_auth_target_changed(self, row) -> None:
+    def _auth_options(self) -> list[str]:
+        """Resource names that can actually be authenticated, plus a None entry.
+
+        "Locked" is the client's own word for a resource needing a per-resource
+        SSO round-trip, and the only place that is visible is the AUTH STATUS
+        column — so filtering on it means the dropdown can never offer a name
+        that would do nothing.
+        """
+        return [
+            r.name
+            for r in self.controller.resources.items
+            if r.auth_status and r.name
+        ]
+
+    def _rebuild_auth_options(self) -> None:
+        """Re-sync the dropdown with the current resource list.
+
+        A saved target that is no longer in the list is kept and shown as
+        "(missing)" rather than being silently dropped — the resource may simply
+        not be listed this session, and quietly forgetting the user's choice is
+        worse than showing a stale one.
+        """
+        saved = self.controller.prefs.auth_target.strip()
+        names = self._auth_options()
+        if saved and saved not in names:
+            names = names + [saved]
+
+        labels = ["None"] + names
+        self._auth_names = names
+
+        was_syncing, self._syncing = self._syncing, True
+        try:
+            self._auth_target_row.set_model(Gtk.StringList.new(labels))
+            if saved and saved in names:
+                self._auth_target_row.set_selected(names.index(saved) + 1)
+            else:
+                self._auth_target_row.set_selected(0)
+
+            if not self._auth_options():
+                hint = "No resource currently needs authentication"
+                if not self.controller.resources.items:
+                    hint = "Connect to list resources that need authentication"
+                self._auth_target_row.set_subtitle(hint)
+            else:
+                self._auth_target_row.set_subtitle(
+                    "Run SSO for this resource once connected"
+                )
+        finally:
+            self._syncing = was_syncing
+
+    def _on_auth_target_selected(self, row, _pspec) -> None:
         if self._syncing:
             return
-        self.controller.prefs.auth_target = row.get_text().strip()
-        # Debounce: `Adw.EntryRow` emits `changed` more than once per edit (and
-        # again on every programmatic set), and writing prefs.json per keystroke
-        # is a pointless fsync storm. One write, 400 ms after the last edit.
-        if self._auth_save_id:
-            GLib.source_remove(self._auth_save_id)
-        self._auth_save_id = GLib.timeout_add(400, self._flush_auth_target)
-
-    def _flush_auth_target(self) -> bool:
-        self._auth_save_id = 0
+        index = row.get_selected()
+        if index == 0 or index > len(self._auth_names):
+            self.controller.prefs.auth_target = ""
+        else:
+            self.controller.prefs.auth_target = self._auth_names[index - 1]
+        # A dropdown emits one change per pick, so no debounce is needed.
         self.controller.save_prefs(self.toast)
-        return False  # one-shot
 
     def _on_tailscale_switch(self, row, _pspec) -> None:
         if self._syncing:

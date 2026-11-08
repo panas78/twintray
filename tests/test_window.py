@@ -196,37 +196,88 @@ def test_every_state_redraws_without_error(window):
         win.update(controller.status)
 
 
-def _pump(milliseconds=900):
-    """Run the main loop for a while so a GLib timeout can fire."""
-    from gi.repository import GLib
-
-    context = GLib.MainContext.default()
-    deadline = GLib.get_monotonic_time() + milliseconds * 1000
-    while GLib.get_monotonic_time() < deadline:
-        while context.iteration(False):
-            pass
-        GLib.usleep(2000)
-
-
-def test_auth_target_edit_is_persisted(window):
+def test_auth_target_dropdown_offers_only_resources_that_need_auth(window):
     win, controller = window
+    # The fixture seeds a saved target; clear it so the option list is the only
+    # thing under test.
+    controller.prefs.auth_target = ""
+    controller.resources = core.ResourceList(
+        items=[
+            core.Resource("locked-one", "10.0.0.1", auth_status="Auth expires in 6 days"),
+            core.Resource("needs-nothing", "10.0.0.2"),
+            core.Resource("also-locked", "10.0.0.3", auth_status="Pending authentication"),
+        ]
+    )
+    win.update_resources(controller.resources)
+
+    model = win._auth_target_row.get_model()
+    labels = [model.get_string(i) for i in range(model.get_n_items())]
+    # "None" first, then the two that would actually do something.
+    assert labels == ["None", "locked-one", "also-locked"]
+
+
+def test_auth_target_selection_is_persisted(window):
+    win, controller = window
+    controller.resources = core.ResourceList(
+        items=[core.Resource("locked-one", "10.0.0.1", auth_status="expired")]
+    )
+    win.update_resources(controller.resources)
+
     before = controller.saves
-    win._auth_target_row.set_text("*.example.gr")
-    # The value is live immediately; the write is debounced.
-    assert controller.prefs.auth_target == "*.example.gr"
+    win._auth_target_row.set_selected(1)
+    assert controller.prefs.auth_target == "locked-one"
+    assert controller.saves == before + 1
+
+    win._auth_target_row.set_selected(0)
+    assert controller.prefs.auth_target == ""
+
+
+def test_a_saved_target_is_restored_after_the_list_loads(window):
+    """Prefs survive restarts; the resource list only exists once connected."""
+    win, controller = window
+    controller.prefs.auth_target = "locked-one"
+    win.update_resources(
+        core.ResourceList(
+            items=[core.Resource("locked-one", "10.0.0.1", auth_status="expired")]
+        )
+    )
+    assert win._auth_target_row.get_selected() == 1
+
+
+def test_a_saved_target_missing_from_the_list_is_kept_not_dropped(window):
+    """Silently forgetting the user's choice is worse than showing it stale."""
+    win, controller = window
+    controller.prefs.auth_target = "vanished-resource"
+    win.update_resources(core.ResourceList(items=[]))
+
+    model = win._auth_target_row.get_model()
+    labels = [model.get_string(i) for i in range(model.get_n_items())]
+    assert "vanished-resource" in labels
+    assert win._auth_target_row.get_selected() == 1
+    assert controller.prefs.auth_target == "vanished-resource"
+
+
+def test_rebuilding_the_dropdown_never_writes_prefs(window):
+    """Programmatic re-sync must not look like the user picked something."""
+    win, controller = window
+    controller.prefs.auth_target = "locked-one"
+    controller.resources = core.ResourceList(
+        items=[core.Resource("locked-one", "10.0.0.1", auth_status="expired")]
+    )
+    before = controller.saves
+    win.update_resources(controller.resources)
     assert controller.saves == before
-    _pump()
-    assert controller.saves == before + 1
 
 
-def test_auth_target_typing_is_debounced_into_one_write(window):
+def test_dropdown_explains_an_empty_list(window):
     win, controller = window
-    before = controller.saves
-    for text in ("*.a", "*.ab", "*.abc", "*.abcd"):
-        win._auth_target_row.set_text(text)
-    _pump()
-    assert controller.saves == before + 1
-    assert controller.prefs.auth_target == "*.abcd"
+    controller.resources = core.ResourceList()
+    win.update_resources(controller.resources)
+    assert "connect" in win._auth_target_row.get_subtitle().lower()
+
+    controller.resources = core.ResourceList(items=[core.Resource("plain", "10.0.0.1")])
+    win.update_resources(controller.resources)
+    assert "no resource" in win._auth_target_row.get_subtitle().lower()
 
 
 def test_settings_switches_write_through(window, monkeypatch):
