@@ -353,53 +353,46 @@ class TwinTrayWindow(Adw.ApplicationWindow):
     def _on_toggle_clicked(self, _button) -> None:
         self.controller.toggle_async()
 
-    def _auth_options(self) -> list[str]:
-        """Resource names that can actually be authenticated, plus a None entry.
+    def _locked_resources(self) -> list[str]:
+        """Names of resources the client considers locked.
 
-        "Locked" is the client's own word for a resource needing a per-resource
-        SSO round-trip, and the only place that is visible is the AUTH STATUS
-        column — so filtering on it means the dropdown can never offer a name
-        that would do nothing.
+        Only these can be authenticated: "locked" is the client's own term for a
+        resource needing a per-resource SSO round-trip, and the AUTH STATUS
+        column is the only place it shows. Filtering on it means the dropdown
+        can never offer a name that would do nothing.
         """
         return [
-            r.name
-            for r in self.controller.resources.items
-            if r.auth_status and r.name
+            r.name for r in self.controller.resources.items if r.auth_status and r.name
         ]
 
     def _rebuild_auth_options(self) -> None:
         """Re-sync the dropdown with the current resource list.
 
-        A saved target that is no longer in the list is kept and shown as
-        "(missing)" rather than being silently dropped — the resource may simply
-        not be listed this session, and quietly forgetting the user's choice is
-        worse than showing a stale one.
+        A saved target missing from the list is appended rather than dropped —
+        the list only exists while connected, and forgetting the user's choice
+        because the daemon is down is worse than showing it stale.
         """
         saved = self.controller.prefs.auth_target.strip()
-        names = self._auth_options()
-        if saved and saved not in names:
-            names = names + [saved]
-
-        labels = ["None"] + names
-        self._auth_names = names
+        locked = self._locked_resources()
+        self._auth_names = locked + [saved] if saved and saved not in locked else locked
 
         was_syncing, self._syncing = self._syncing, True
         try:
-            self._auth_target_row.set_model(Gtk.StringList.new(labels))
-            if saved and saved in names:
-                self._auth_target_row.set_selected(names.index(saved) + 1)
-            else:
-                self._auth_target_row.set_selected(0)
-
-            if not self._auth_options():
+            self._auth_target_row.set_model(
+                Gtk.StringList.new(["None"] + self._auth_names)
+            )
+            # A saved target is guaranteed present: either it was locked, or it
+            # was just appended.
+            self._auth_target_row.set_selected(
+                self._auth_names.index(saved) + 1 if saved else 0
+            )
+            if locked:
+                hint = "Run SSO for this resource once connected"
+            elif self.controller.resources.items:
                 hint = "No resource currently needs authentication"
-                if not self.controller.resources.items:
-                    hint = "Connect to list resources that need authentication"
-                self._auth_target_row.set_subtitle(hint)
             else:
-                self._auth_target_row.set_subtitle(
-                    "Run SSO for this resource once connected"
-                )
+                hint = "Connect to list resources that need authentication"
+            self._auth_target_row.set_subtitle(hint)
         finally:
             self._syncing = was_syncing
 
