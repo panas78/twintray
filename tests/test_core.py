@@ -346,42 +346,68 @@ def test_disable_on_missing_entry_is_a_noop(tmp_path, monkeypatch):
 # ------------------------------------------------------------------------- icons
 
 
-def test_every_state_has_a_distinct_colour():
-    # Two states sharing a colour means the icon stops conveying the case that
-    # most needs attention.
-    colours = list(icons.STATE_COLORS.values())
-    assert len(set(colours)) == len(colours)
+def test_every_state_has_a_colour():
     for state in core.KNOWN_STATES:
         assert state in icons.STATE_COLORS
 
 
-def test_online_has_no_state_dot():
-    # A healthy connection gets the untouched mark.
-    assert icons.ONLINE not in icons.DOT_STATES
-    plain = icons.surface_to_pixmap(icons.tray_surface(icons.ONLINE, 22))[2]
-    for state in icons.DOT_STATES:
-        drawn = icons.surface_to_pixmap(icons.tray_surface(state, 22))[2]
-        assert drawn != plain, state
+def test_connected_is_green_and_not_connected_is_white():
+    """Colour is the whole signal now, so the mapping is a contract."""
+    assert icons.STATE_COLORS[icons.ONLINE] == icons.GREEN
+    for state in (icons.OFFLINE, icons.DISCONNECTED, icons.STOPPED):
+        assert icons.STATE_COLORS[state] == icons.WHITE, state
+    # Attention states keep colours of their own.
+    assert icons.STATE_COLORS[icons.AUTHENTICATING] == icons.AMBER
+    assert icons.STATE_COLORS[icons.ERROR] == icons.RED
+
+
+def test_connected_and_stopped_really_render_different_colours():
+    def dominant(state):
+        _w, _h, data = icons.surface_to_pixmap(icons.tray_surface(state, 22))
+        # Fully opaque pixels only. Cairo is premultiplied, so antialiased edge
+        # pixels carry RGB scaled by their coverage and would drag the mean
+        # toward black — averaging those compares the *shape*, not the colour.
+        px = [data[i : i + 4] for i in range(0, len(data), 4) if data[i] == 255]
+        assert px, state
+        n = len(px)
+        return tuple(sum(p[c] for p in px) / n / 255 for c in (1, 2, 3))
+
+    online = dominant(icons.ONLINE)
+    stopped = dominant(icons.STOPPED)
+    assert online == pytest.approx(icons.GREEN, abs=0.02)
+    assert stopped == pytest.approx(icons.WHITE, abs=0.02)
+    assert online != stopped
+
+
+def test_there_is_no_state_dot_any_more():
+    """The dot was removed by request; colour carries state instead.
+
+    A regression here means the corner annotation crept back in, so assert the
+    glyph's own bounding box is the only thing drawn: no opaque pixel may sit
+    outside it. The bottom-right corner is where the dot lived.
+    """
+    size = 22
+    _w, _h, data = icons.surface_to_pixmap(icons.tray_surface(icons.STOPPED, size))
+
+    def alpha(x, y):
+        return data[(y * size + x) * 4]
+
+    for state in core.KNOWN_STATES:
+        _w, _h, d = icons.surface_to_pixmap(icons.tray_surface(state, size))
+        assert d[(size - 3) * size * 4 + (size - 3) * 4] == 0, state
+    assert alpha(0, 0) == 0
+
+
+def test_the_logo_mask_exists_and_has_coverage():
+    assert icons.MASK_PATH.exists(), f"missing {icons.MASK_PATH}"
+    surface = icons.mask_surface()
+    assert surface.get_width() == surface.get_height()
 
 
 def test_unknown_state_renders_as_stopped():
     unknown = icons.surface_to_pixmap(icons.tray_surface("brand-new-state", 22))[2]
     stopped = icons.surface_to_pixmap(icons.tray_surface(icons.STOPPED, 22))[2]
     assert unknown == stopped
-
-
-def test_dot_centre_pixel_uses_the_state_colour():
-    for state in icons.DOT_STATES:
-        surface = icons.tray_surface(state, 22)
-        width, height, data = icons.surface_to_pixmap(surface)
-        # Dot centre, per _draw_state_dot.
-        centre = int(22 * (1 - icons.DOT_OUTER - 0.05))
-        offset = (centre * width + centre) * 4
-        alpha, red, green, blue = data[offset : offset + 4]
-        assert alpha == 255, state
-        expected = icons.STATE_COLORS[state]
-        got = (red / 255, green / 255, blue / 255)
-        assert got == pytest.approx(expected, abs=0.03), state
 
 
 def test_pixmap_is_tightly_packed():
@@ -408,3 +434,10 @@ def test_plates_differ_from_tray_rendering():
     tray = icons.surface_to_pixmap(icons.tray_surface(icons.ONLINE, 48))[2]
     plate = icons.surface_to_pixmap(icons.plate_surface(icons.ONLINE, 48))[2]
     assert tray != plate
+
+
+def test_plate_is_state_independent():
+    """An app-menu icon is an identity, not a status readout."""
+    a = icons.surface_to_pixmap(icons.plate_surface(icons.ONLINE, 48))[2]
+    b = icons.surface_to_pixmap(icons.plate_surface(icons.STOPPED, 48))[2]
+    assert a == b

@@ -1,19 +1,22 @@
-"""Everything the app draws, in cairo, with no asset files.
+"""Everything the app draws, with no icon-theme dependency.
 
-Two renderings, two jobs:
+The mark is the real Twingate logo, shipped as an alpha mask
+(`data/twingate.png`) so it can be painted in any colour. Two renderings, two
+jobs:
 
-* the **tray** gets the bare TwinTray mark on a transparent background plus a
-  small ringed state dot, because a bar full of strangers needs "which app is
-  this?" answered before "is it connected?";
-* the **launcher icon** gets the same mark on a rounded mint plate, because a
-  transparent glyph is invisible in a menu or a dock.
+* the **tray** gets the bare glyph, tinted by state, on a transparent
+  background. There is no state dot: colour alone carries the state, which is
+  one thing to read instead of two;
+* the **launcher icon** gets the glyph on a rounded near-black plate, matching
+  the source artwork — a transparent white glyph is invisible in a menu or dock.
 
-Both come from one function, so the mark cannot drift between them.
+Both come from the same mask, so the mark cannot drift between them.
 """
 
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import cairo
 
@@ -26,70 +29,91 @@ DISCONNECTED = "disconnected"
 ERROR = "error"
 STOPPED = "not-running"
 
-# Every state needs a colour of its own: two states sharing one means the icon
-# stops conveying the case that most needs attention.
+WHITE = (1.00, 1.00, 1.00)
+GREEN = (0.20, 0.83, 0.60)
+AMBER = (0.98, 0.75, 0.25)
+RED = (0.90, 0.35, 0.35)
+
+# Colour alone carries the state now, so the mapping is the whole UI contract.
+# The three not-connected states deliberately share white — to a user glancing
+# at the bar they are one situation, "off". Only states that need attention get
+# a colour of their own, because only those should interrupt.
 STATE_COLORS = {
-    ONLINE: (0.20, 0.83, 0.60),
-    AUTHENTICATING: (0.98, 0.75, 0.25),
-    OFFLINE: (0.65, 0.68, 0.75),
-    DISCONNECTED: (0.45, 0.52, 0.66),
-    ERROR: (0.90, 0.35, 0.35),
-    STOPPED: (0.55, 0.58, 0.64),
+    ONLINE: GREEN,
+    AUTHENTICATING: AMBER,
+    OFFLINE: WHITE,
+    DISCONNECTED: WHITE,
+    ERROR: RED,
+    STOPPED: WHITE,
 }
 
-# A state that needs the user to act. `online` is deliberately absent — a
-# perfectly healthy connection gets the untouched mark and no annotation.
-DOT_STATES = (AUTHENTICATING, OFFLINE, DISCONNECTED, ERROR, STOPPED)
-
-GLYPH_COLOR = (0.00, 0.79, 0.67)      # TwinTray mint, on transparent
-PLATE_COLOR = (0.00, 0.72, 0.62)      # launcher plate
-PLATE_GLYPH = (0.04, 0.13, 0.16)      # near-black on the plate
-RING_COLOR = (0.10, 0.12, 0.16)       # separates the dot from the mark
-
-DOT_OUTER = 0.18                      # fractions of the icon size
-DOT_INNER = 0.125
+PLATE_BG = (0.071, 0.075, 0.082)       # near-black, as in the source artwork
+PLATE_GLYPH = WHITE
 
 
-def _mark(cr, size, color, stroke_ratio=0.125, scale=1.0):
-    """Draw the TwinTray mark: two nodes joined by a bar.
+# ----------------------------------------------------------------------- mask
 
-    A `>  <` pair was the first design and it does not survive: at 22 px the two
-    apexes are ~2 px apart and the whole thing reads as an **X**, i.e. the
-    universal glyph for "close/cancel" — the worst possible message on a VPN
-    toggle. Two nodes and a bar stay legible at bar size and cannot be misread.
+MASK_PATH = Path(__file__).with_name("data") / "twingate.png"
+
+_mask_cache: cairo.ImageSurface | None = None
+_scaled_cache: dict[int, cairo.ImageSurface] = {}
+
+
+def mask_surface() -> cairo.ImageSurface:
+    """The stored alpha mask, loaded once. RGB is irrelevant; alpha is coverage."""
+    global _mask_cache
+    if _mask_cache is None:
+        if not MASK_PATH.exists():
+            raise RuntimeError(f"logo mask missing: {MASK_PATH}")
+        _mask_cache = cairo.ImageSurface.create_from_png(str(MASK_PATH))
+    return _mask_cache
+
+
+def _scaled_mask(size: int) -> cairo.ImageSurface:
+    """The mask resampled to `size` and stroke-hardened, cached per size.
+
+    The logo's strokes are thin, and at 22 px they land on sub-pixel widths, so
+    resampling alone leaves them half-transparent and washed out on a bar. An
+    alpha gamma of 0.7 pushes partial coverage toward solid; it is a
+    small-size hinting trick, not a colour change, and at large sizes it only
+    touches the antialiased rim.
+
+    Only alpha is rewritten: this surface is ever used as a *mask* (alpha is the
+    coverage) and never painted, so leaving RGB premultiplied by the pre-boost
+    values is harmless here.
     """
-    mid = size / 2.0
-    radius = size * 0.135 * scale
-    offset = size * 0.265 * scale
-    bar = max(1.0, size * stroke_ratio * scale)
+    cached = _scaled_cache.get(size)
+    if cached is None:
+        source = mask_surface()
+        cached = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
+        cr = cairo.Context(cached)
+        cr.scale(size / source.get_width(), size / source.get_height())
+        cr.set_source_surface(source, 0, 0)
+        cr.get_source().set_filter(cairo.FILTER_BEST)
+        cr.paint()
+        cached.flush()
 
+        data = cached.get_data()
+        stride = cached.get_stride()
+        for row in range(size):
+            base = row * stride
+            for col in range(size):
+                offset = base + col * 4 + 3
+                alpha = data[offset]
+                if 0 < alpha < 255:
+                    data[offset] = min(255, int(round(255 * (alpha / 255.0) ** 0.7)))
+        cached.mark_dirty()
+        cached.flush()
+        _scaled_cache[size] = cached
+    return cached
+
+
+def _paint_glyph(cr, size: int, color) -> None:
     cr.set_source_rgb(*color)
-
-    # Bar first, so the node circles sit on top of its rounded ends.
-    cr.set_line_width(bar)
-    cr.set_line_cap(cairo.LINE_CAP_ROUND)
-    cr.move_to(mid - offset, mid)
-    cr.line_to(mid + offset, mid)
-    cr.stroke()
-
-    for direction in (-1, 1):
-        cr.arc(mid + direction * offset, mid, radius, 0, 2 * math.pi)
-        cr.fill()
+    cr.mask_surface(_scaled_mask(size), 0, 0)
 
 
-def _draw_state_dot(cr, state, size):
-    """A ringed corner dot. The ring is load-bearing, not decoration."""
-    outer = size * DOT_OUTER
-    centre = size * (1 - DOT_OUTER - 0.05)
-    cr.arc(centre, centre, outer, 0, 2 * math.pi)
-    cr.set_source_rgb(*RING_COLOR)
-    cr.fill()
-    cr.arc(centre, centre, size * DOT_INNER, 0, 2 * math.pi)
-    cr.set_source_rgb(*STATE_COLORS[state])
-    cr.fill()
-
-
-def _surface(size):
+def _surface(size: int):
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, size, size)
     return surface, cairo.Context(surface)
 
@@ -99,20 +123,24 @@ def canonical(state: str) -> str:
     return state if state in STATE_COLORS else STOPPED
 
 
+def state_color(state: str):
+    return STATE_COLORS[canonical(state)]
+
+
 def tray_surface(state: str, size: int = 22) -> cairo.ImageSurface:
-    """The bar icon: mint mark on transparent, plus a dot if action is needed."""
-    state = canonical(state)
+    """The bar icon: the glyph alone, tinted by state, no dot."""
     surface, cr = _surface(size)
-    _mark(cr, size, GLYPH_COLOR)
-    if state in DOT_STATES:
-        _draw_state_dot(cr, state, size)
+    _paint_glyph(cr, size, state_color(state))
     surface.flush()
     return surface
 
 
-def plate_surface(state: str, size: int = 128) -> cairo.ImageSurface:
-    """The launcher icon: the same mark, on a rounded plate."""
-    state = canonical(state)
+def plate_surface(state: str = ONLINE, size: int = 128) -> cairo.ImageSurface:
+    """The launcher icon: glyph on a rounded near-black plate.
+
+    Deliberately not state-coloured — an app-menu icon is an identity, and it
+    must not look like a different application depending on connection state.
+    """
     surface, cr = _surface(size)
     radius = size * 0.22
     x = y = size * 0.04
@@ -123,19 +151,18 @@ def plate_surface(state: str, size: int = 128) -> cairo.ImageSurface:
     cr.arc(x + radius, y + h - radius, radius, math.pi / 2, math.pi)
     cr.arc(x + radius, y + radius, radius, math.pi, 3 * math.pi / 2)
     cr.close_path()
-    cr.set_source_rgb(*PLATE_COLOR)
+    cr.set_source_rgb(*PLATE_BG)
     cr.fill()
 
-    # Inset the mark so it keeps breathing room inside the plate, but not so
-    # much that it disappears at 22 px — 0.18 of the size made it a smudge.
-    inset = size * 0.14
+    # Inset so the glyph keeps breathing room, but not so much that it becomes
+    # a smudge at 22 px.
+    inner = int(round(size * 0.82))
+    inset = (size - inner) / 2.0
     cr.save()
     cr.translate(inset, inset)
-    _mark(cr, size - 2 * inset, PLATE_GLYPH, stroke_ratio=0.145, scale=1.02)
+    _paint_glyph(cr, inner, PLATE_GLYPH)
     cr.restore()
 
-    if state in DOT_STATES:
-        _draw_state_dot(cr, state, size)
     surface.flush()
     return surface
 
@@ -143,12 +170,14 @@ def plate_surface(state: str, size: int = 128) -> cairo.ImageSurface:
 def surface_to_pixmap(surface: cairo.ImageSurface) -> tuple[int, int, bytes]:
     """ARGB32 → SNI's `a(iiay)` payload.
 
-    Two conversions happen here and both are mandatory:
+    Two conversions happen here:
 
-    * cairo is native-endian **premultiplied** ARGB, D-Bus wants A,R,G,B — on
-      x86 that is a byte reorder per pixel;
-    * cairo pads the row stride (a 22 px surface has a 96-byte stride, not 88),
-      so the raw buffer cannot be sent: every row would shift.
+    * cairo is native-endian **premultiplied** ARGB and D-Bus wants A,R,G,B, so
+      the bytes are reordered per pixel;
+    * the output is rebuilt tightly as `width * height * 4`, which is the buffer
+      length D-Bus requires. (Cairo's own stride is already `width * 4` for
+      ARGB32 — 4 bytes per pixel is inherently aligned — so this is a contract
+      guarantee, not a de-padding step.)
     """
     width, height = surface.get_width(), surface.get_height()
     data = surface.get_data()
@@ -171,8 +200,6 @@ def tray_pixmap(state: str, size: int = 22) -> list[tuple[int, int, bytes]]:
 
 
 def write_png(surface: cairo.ImageSurface, path) -> None:
-    from pathlib import Path
-
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     surface.write_to_png(str(path))

@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Iterable, Sequence
 
 TWINGATE = "twingate"
@@ -524,6 +525,16 @@ def doctor() -> list[tuple[str, bool | None, str]]:
     checks.append(
         ("tailscale", True, "coupled" if tailscale_available() else "not installed")
     )
+
+    # The tray icon is painted from a shipped alpha mask; if the asset is
+    # missing the tray raises at first draw, so surface it here instead.
+    mask = Path(__file__).with_name("data") / "twingate.png"
+    if mask.exists():
+        checks.append(("logo mask", True, str(mask)))
+    else:
+        checks.append(
+            ("logo mask", False, f"{mask} missing — tray icon cannot be drawn")
+        )
 
     try:
         import gi  # noqa: F401

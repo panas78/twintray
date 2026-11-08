@@ -13,8 +13,10 @@ tray icon.
 
 ## What it does
 
-- **State at a glance** — the tray icon carries a small colour dot: green for
-  connected, amber while authenticating, red on error, grey when stopped.
+- **State at a glance** — the tray icon is the Twingate glyph, tinted by state:
+  **white when not connected**, **green when connected**, amber while
+  authenticating, red on error. No corner dot: colour alone carries the state,
+  so there is one thing to read instead of two.
 - **One-click connect/disconnect** — starts and stops `twingate.service`
   passwordless (via a polkit rule), then kicks the SSO flow.
 - **Tailscale coupling** — Twingate and Tailscale both claim `100.96.12.0/12`,
@@ -82,6 +84,7 @@ twintray/cli.py         argparse front-end over core
 twintray/window.py      GTK4/libadwaita window, three tabs
 twintray/tray.py        StatusNotifierItem + DBusMenu, written against Gio.DBus
 twintray/icons.py       every pixel the app draws, in cairo
+twintray/data/twingate.png  the logo as an alpha mask, tinted at draw time
 twintray/prefs.py       one JSON file under XDG_CONFIG_HOME
 twintray/autostart.py   the XDG autostart entry, one writer, three callers
 ```
@@ -107,4 +110,10 @@ themselves with no display; run them on a desktop or they prove nothing.
   here makes the host draw that glyph and ignore the pixmap entirely.
 - `Status` is always `Active`. Noctalia hides `Passive` items, and "disconnected"
   is exactly when a VPN icon must stay clickable.
+- The logo is an alpha mask, tinted in cairo at draw time, so one asset covers
+  every state. Its strokes are thin and land on sub-pixel widths at 22 px, so
+  the resampled mask gets an alpha gamma of 0.7 — a hinting trick, not a colour
+  change, or the icon reads as washed out in the bar.
+- White on a **light** bar is invisible. The default assumes a dark bar; on a
+  light theme, drop `STATE_COLORS[STOPPED]` to a mid grey.
 - Closing the window hides it. Quit is an explicit menu item.
