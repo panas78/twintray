@@ -1,3 +1,5 @@
+# Disclaimer: This project mostly ai generated.
+
 # TwinTray
 
 A system tray front-end for the [Twingate](https://www.twingate.com) client on
@@ -51,11 +53,10 @@ sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 python3-cairo desktop-fi
 
 `systemctl start/stop twingate` needs polkit authorization. A bare wlroots
 session (niri/Umbriel, labwc) ships no polkit agent, so the prompt never appears
-and the click silently fails. The rule that fixes it lives in the sibling
-[MySettings](https://github.com/panas78/MySettings) repo:
+and the click silently fails. The rule that fixes it lives in the "install-twingate-polkit.sh"
 
 ```bash
-sudo ~/dev/MySettings/Linux/install-twingate-polkit.sh
+sudo ./install-twingate-polkit.sh
 ```
 
 `twintray doctor` tells you whether it is working.
