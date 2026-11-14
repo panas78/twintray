@@ -54,6 +54,10 @@ class FakeController:
     def refresh_async(self, then=None):
         pass
 
+    def authenticate_async(self, target="", on_result=None):
+        self.authentications = getattr(self, "authentications", 0) + 1
+        self.auth_target_used = target
+
 
 @pytest.fixture(scope="session")
 def application():
@@ -424,3 +428,71 @@ def test_the_app_actually_starts(monkeypatch):
     assert called == [True]
 
     instance.quit()
+
+
+# --------------------------------------------------- resources tab auth button
+
+
+def _listing(*resources):
+    return core.ResourceList(items=list(resources))
+
+
+def test_authenticate_button_is_disabled_when_nothing_is_pending(window):
+    win, _controller = window
+    win.update_resources(_listing(core.Resource("BC Prod SQL", "10.0.0.5")))
+    assert win._authenticate_button.get_sensitive() is False
+    assert win._authenticate_button.get_label() == "Authenticate"
+
+
+def test_authenticate_button_lights_up_for_one_pending_resource(window):
+    win, controller = window
+    win.update_resources(
+        _listing(
+            core.Resource("*.diastasys.gr", "*.diastasys.gr", auth_status="Pending"),
+            core.Resource("Diastasys Internal LAN", "10.10.0.0/24"),
+        )
+    )
+    button = win._authenticate_button
+    assert button.get_sensitive() is True
+    # The name is in the label, so the click has no ambiguity about its target.
+    assert button.get_label() == "Authenticate *.diastasys.gr"
+
+    button.emit("clicked")
+    assert controller.authentications == 1
+
+
+def test_authenticate_button_counts_several_pending_resources(window):
+    win, controller = window
+    win.update_resources(
+        _listing(
+            core.Resource("a", "10.0.0.1", auth_status="Pending"),
+            core.Resource("b", "10.0.0.2", auth_status="Pending"),
+            core.Resource("c", "10.0.0.3"),
+        )
+    )
+    button = win._authenticate_button
+    assert button.get_sensitive() is True
+    assert button.get_label() == "Authenticate 2 resources"
+    assert "a" in button.get_tooltip_text() and "b" in button.get_tooltip_text()
+
+    button.emit("clicked")
+    assert controller.authentications == 1
+
+
+def test_authenticate_button_goes_back_to_disabled_after_auth(window):
+    """After the SSO completes the list refreshes and nothing is pending."""
+    win, _controller = window
+    win.update_resources(
+        _listing(core.Resource("x", "10.0.0.1", auth_status="Pending"))
+    )
+    assert win._authenticate_button.get_sensitive() is True
+
+    win.update_resources(_listing(core.Resource("x", "10.0.0.1")))
+    assert win._authenticate_button.get_sensitive() is False
+    assert win._authenticate_button.get_label() == "Authenticate"
+
+
+def test_authenticate_button_is_disabled_for_an_empty_or_failed_listing(window):
+    win, _controller = window
+    win.update_resources(core.ResourceList(items=[], error="not connected"))
+    assert win._authenticate_button.get_sensitive() is False

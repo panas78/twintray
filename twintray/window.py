@@ -183,10 +183,26 @@ class TwinTrayWindow(Adw.ApplicationWindow):
         group.add(self._resources_empty)
 
         refresh = Gtk.Button(label="Refresh")
-        refresh.set_halign(Gtk.Align.CENTER)
-        refresh.set_margin_top(6)
         refresh.connect("clicked", lambda *_: self.controller.refresh_async())
-        group.add(refresh)
+
+        self._authenticate_button = Gtk.Button(label="Authenticate")
+        self._authenticate_button.set_tooltip_text(
+            "Open the browser to authenticate resources that are still pending"
+        )
+        # Nothing to authenticate until the client reports a locked resource, so
+        # starting insensitive is the truth, not a placeholder. update_resources
+        # turns it on the moment one appears.
+        self._authenticate_button.set_sensitive(False)
+        self._authenticate_button.connect(
+            "clicked", lambda *_: self.controller.authenticate_async()
+        )
+
+        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        actions.set_halign(Gtk.Align.CENTER)
+        actions.set_margin_top(6)
+        actions.append(refresh)
+        actions.append(self._authenticate_button)
+        group.add(actions)
 
         page.add(group)
         self._stack.add_titled_with_icon(
@@ -325,6 +341,8 @@ class TwinTrayWindow(Adw.ApplicationWindow):
         while child := self._resources_list.get_first_child():
             self._resources_list.remove(child)
 
+        self._sync_authenticate_button(listing)
+
         items = listing.items
         if not items:
             self._resources_empty.set_visible(True)
@@ -344,6 +362,31 @@ class TwinTrayWindow(Adw.ApplicationWindow):
         self._update_auth_row()
         # The dropdown's options come from this list, so it has to follow it.
         self._rebuild_auth_options()
+
+    def _sync_authenticate_button(self, listing: core.ResourceList) -> None:
+        """Only offer authentication when the client says something is locked.
+
+        A permanently live button would invite clicks that open a browser tab
+        and do nothing. The label carries the count so the user can see what the
+        click will cost before making it.
+        """
+        pending = listing.pending
+        self._authenticate_button.set_sensitive(bool(pending))
+        if not pending:
+            self._authenticate_button.set_label("Authenticate")
+            self._authenticate_button.set_tooltip_text(
+                "Nothing needs authenticating right now"
+            )
+        elif len(pending) == 1:
+            self._authenticate_button.set_label(f"Authenticate {pending[0].name}")
+            self._authenticate_button.set_tooltip_text(
+                f"Authenticate {pending[0].name} ({pending[0].auth_status})"
+            )
+        else:
+            self._authenticate_button.set_label(f"Authenticate {len(pending)} resources")
+            self._authenticate_button.set_tooltip_text(
+                "Authenticate: " + ", ".join(r.name for r in pending)
+            )
 
     def set_action_steps(self, steps: list[str]) -> None:
         self._action_steps.set_label("\n".join(steps))
