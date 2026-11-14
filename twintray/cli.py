@@ -23,14 +23,29 @@ def _print_checks(checks) -> None:
 
 def cmd_status(args) -> int:
     current = core.status(verbose=not args.brief)
+    # Locked resources are only meaningful while the tunnel is up, but the key
+    # is always present: a JSON contract with conditionally-absent fields makes
+    # every consumer write the same `if` and one of them forgets.
+    listing = core.resources() if current.state in core.LIVE_STATES else None
+    pending = listing.pending if listing is not None else []
+
     if args.json:
-        print(json.dumps(current.to_dict(), indent=2))
+        payload = current.to_dict()
+        payload["pending_auth"] = [r.name for r in pending]
+        print(json.dumps(payload, indent=2))
         return 0 if current.state != core.UNKNOWN else 1
+
     print(current.label)
     if current.network:
         print(f"  network: {current.network}")
     if current.auth_expires:
         print(f"  auth:    {current.auth_expires}")
+    # The trap this line exists for: online, tunnel up, and the resource you
+    # actually want is still locked behind its own SSO round-trip.
+    if pending:
+        waiting = ", ".join(f"{r.name} ({r.auth_status})" for r in pending)
+        print(f"  pending: {waiting}")
+        print("  run 'twintray auth' to authenticate")
     if current.error:
         print(f"  error:   {current.error}", file=sys.stderr)
     return 0 if current.state != core.UNKNOWN else 1
@@ -49,8 +64,19 @@ def cmd_resources(args) -> int:
         return 0
     width = max(len(item.name) for item in listing.items)
     for item in listing.items:
-        print(f"{item.name:<{width}}  {item.address}" if item.address else item.name)
+        line = f"{item.name:<{width}}  {item.address}" if item.address else item.name
+        if item.needs_auth:
+            line += f"  [{item.auth_status}]"
+        print(line)
     return 0
+
+
+def cmd_auth(args) -> int:
+    result = core.authenticate(args.target or "")
+    for step in result.steps:
+        print(f"  {step}")
+    print(result.message)
+    return 0 if result.ok else 1
 
 
 def cmd_connect(args) -> int:
@@ -169,6 +195,17 @@ def build_parser() -> argparse.ArgumentParser:
     resources.add_argument("--json", action="store_true")
     resources.add_argument("--all", action="store_true", help="Include hidden resources")
     resources.set_defaults(func=cmd_resources)
+
+    auth = sub.add_parser(
+        "auth", help="Authenticate a locked resource (opens your browser)"
+    )
+    auth.add_argument(
+        "target",
+        nargs="?",
+        default="",
+        help="Resource name; omit to authenticate everything that is pending",
+    )
+    auth.set_defaults(func=cmd_auth)
 
     connect = sub.add_parser("connect", help="Start the tunnel (mirrors tg-start)")
     connect.add_argument("--target", default=None, help="Resource pattern for twingate auth")

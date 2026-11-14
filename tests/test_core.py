@@ -58,6 +58,15 @@ REAL_RESOURCES = (
     "\n"
 )
 
+# Verbatim from `twingate resources -d` while a resource's own SSO had not been
+# completed: identical except for the word in the AUTH STATUS column.
+LOCKED_RESOURCES = (
+    "RESOURCE NAME         \tADDRESS       \tALIAS\tAUTH STATUS\n"
+    "*.diastasys.gr        \t*.diastasys.gr\t-    \tPending\n"
+    "Diastasys Internal LAN\t10.10.0.0/24  \t-    \t\n"
+    "\n"
+)
+
 
 def test_real_output_parses_without_the_header():
     items = core.parse_resources(REAL_RESOURCES)
@@ -95,6 +104,94 @@ def test_non_tab_fallback_still_parses_two_fields():
     items = core.parse_resources("router.internal 10.0.0.1\n")
     assert items[0].name == "router.internal"
     assert items[0].address == "10.0.0.1"
+
+
+def test_pending_auth_is_read_off_the_auth_column():
+    listing = core.ResourceList(items=core.parse_resources(LOCKED_RESOURCES))
+    assert [r.name for r in listing.pending] == ["*.diastasys.gr"]
+    assert listing.pending[0].auth_status == "Pending"
+    # Pending must not be mistaken for part of the alias, the address, or the
+    # resource name — it arrives in the fourth column of a tab-separated row.
+    locked = listing.pending[0]
+    assert locked.address == "*.diastasys.gr"
+    assert locked.alias == ""
+
+
+def test_an_unlocked_listing_has_nothing_pending():
+    listing = core.ResourceList(items=core.parse_resources(REAL_RESOURCES))
+    assert listing.pending == []
+
+
+def test_any_auth_status_counts_as_locked():
+    # Not an allow-list of words: a status this code has never seen must still
+    # be surfaced, or a new client state silently disappears.
+    assert core.Resource("x", auth_status="Pending").needs_auth
+    assert core.Resource("x", auth_status="Expired").needs_auth
+    assert not core.Resource("x", auth_status="").needs_auth
+    assert not core.Resource("x", auth_status="   ").needs_auth
+
+
+def test_authenticate_runs_the_flow_for_each_locked_resource(monkeypatch):
+    calls: list[list[str]] = []
+
+    def fake_run(args, timeout=None):
+        calls.append(args)
+        if args[1] == "resources":
+            return core.Run(True, 0, LOCKED_RESOURCES, "")
+        return core.Run(True, 0, "", "")
+
+    monkeypatch.setattr(core, "run", fake_run)
+    result = core.authenticate()
+
+    assert result.ok is True
+    assert [c[1:] for c in calls] == [
+        ["resources", "-d"],
+        ["auth", "*.diastasys.gr"],
+    ]
+    assert "Authenticated *.diastasys.gr" == result.message
+
+
+def test_authenticate_with_nothing_locked_runs_nothing(monkeypatch):
+    calls: list[list[str]] = []
+
+    def fake_run(args, timeout=None):
+        calls.append(args)
+        return core.Run(True, 0, REAL_RESOURCES, "")
+
+    monkeypatch.setattr(core, "run", fake_run)
+    result = core.authenticate()
+
+    # "Nothing to do" is a success, and it must not open a browser to say so.
+    assert result.ok is True
+    assert result.message == "Nothing needs authenticating"
+    assert [c for c in calls if "auth" in c] == []
+
+
+def test_authenticate_reports_the_resource_that_failed(monkeypatch):
+    def fake_run(args, timeout=None):
+        if args[1] == "resources":
+            return core.Run(True, 0, LOCKED_RESOURCES, "")
+        return core.Run(False, 1, "", "browser hand-off timed out")
+
+    monkeypatch.setattr(core, "run", fake_run)
+    result = core.authenticate()
+
+    assert result.ok is False
+    assert "*.diastasys.gr" in result.message
+
+
+def test_authenticate_honours_an_explicit_target(monkeypatch):
+    calls: list[list[str]] = []
+
+    def fake_run(args, timeout=None):
+        calls.append(args)
+        return core.Run(True, 0, "", "")
+
+    monkeypatch.setattr(core, "run", fake_run)
+    # An explicit name is trusted as given: no resources call, so the user does
+    # not have to wait for a network round-trip to run the command they typed.
+    assert core.authenticate("Diastasys Internal LAN").ok is True
+    assert [c[1:] for c in calls] == [["auth", "Diastasys Internal LAN"]]
 
 
 def test_blank_lines_are_skipped():

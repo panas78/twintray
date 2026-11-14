@@ -18,6 +18,15 @@ def test_status_json_shape(monkeypatch, capsys):
             state=core.ONLINE, network="diastasys", auth_expires="6 days"
         ),
     )
+    # status now reports which resources are locked, so pin that too instead of
+    # shelling out to the real client from a unit test.
+    monkeypatch.setattr(
+        core,
+        "resources",
+        lambda include_hidden=False: core.ResourceList(
+            items=[core.Resource("BC Prod SQL", "10.0.0.5")]
+        ),
+    )
     assert cli.main(["status", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload == {
@@ -28,6 +37,7 @@ def test_status_json_shape(monkeypatch, capsys):
         "auth_expires": "6 days",
         "lines": [],
         "error": "",
+        "pending_auth": [],
     }
 
 
@@ -158,3 +168,84 @@ def test_status_runs_without_importing_gtk():
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().endswith("False False")
+
+
+def test_status_calls_out_a_resource_that_still_needs_auth(monkeypatch, capsys):
+    """The whole point: online is not the same as usable."""
+    monkeypatch.setattr(
+        core,
+        "status",
+        lambda verbose=True: core.Status(state=core.ONLINE, network="diastasys"),
+    )
+    monkeypatch.setattr(
+        core,
+        "resources",
+        lambda include_hidden=False: core.ResourceList(
+            items=core.parse_resources(
+                "RESOURCE NAME\tADDRESS\tALIAS\tAUTH STATUS\n"
+                "*.diastasys.gr\t*.diastasys.gr\t-\tPending\n"
+            )
+        ),
+    )
+    assert cli.main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert "pending:" in out
+    assert "*.diastasys.gr (Pending)" in out
+    assert "twintray auth" in out
+
+
+def test_status_stays_quiet_when_nothing_needs_auth(monkeypatch, capsys):
+    monkeypatch.setattr(
+        core,
+        "status",
+        lambda verbose=True: core.Status(state=core.ONLINE, network="diastasys"),
+    )
+    monkeypatch.setattr(
+        core,
+        "resources",
+        lambda include_hidden=False: core.ResourceList(
+            items=[core.Resource("BC Prod SQL", "10.0.0.5")]
+        ),
+    )
+    assert cli.main(["status"]) == 0
+    assert "pending" not in capsys.readouterr().out
+
+
+def test_status_does_not_ask_the_client_while_disconnected(monkeypatch, capsys):
+    # resources only lists what the tunnel exposes; asking while down either
+    # errors or wastes a network round-trip on every status check.
+    def fail(*_a, **_k):
+        raise AssertionError("resources should not be queried when down")
+
+    monkeypatch.setattr(
+        core, "status", lambda verbose=True: core.Status(state=core.STOPPED)
+    )
+    monkeypatch.setattr(core, "resources", fail)
+    assert cli.main(["status"]) == 0
+
+
+def test_auth_prints_each_step_and_reports_failure(monkeypatch, capsys):
+    monkeypatch.setattr(
+        core,
+        "authenticate",
+        lambda target="": core.ActionResult(
+            False, "Authentication failed for X", ["twingate auth X: FAILED"]
+        ),
+    )
+    assert cli.main(["auth", "X"]) == 1
+    out = capsys.readouterr().out
+    assert "twingate auth X: FAILED" in out
+    assert "Authentication failed for X" in out
+
+
+def test_auth_with_no_target_is_accepted(monkeypatch, capsys):
+    seen = {}
+
+    def fake(target=""):
+        seen["target"] = target
+        return core.ActionResult(True, "Nothing needs authenticating", [])
+
+    monkeypatch.setattr(core, "authenticate", fake)
+    assert cli.main(["auth"]) == 0
+    assert seen["target"] == ""
+    assert "Nothing needs authenticating" in capsys.readouterr().out

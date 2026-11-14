@@ -32,6 +32,7 @@ ID_TOGGLE = 1
 ID_SEPARATOR = 2
 ID_OPEN = 3
 ID_QUIT = 4
+ID_AUTH = 5
 
 SNI_XML = """
 <node>
@@ -156,13 +157,17 @@ class MenuItem:
 class Tray:
     """Registers one SNI item and its menu, and repaints on state changes."""
 
-    def __init__(self, on_toggle, on_open, on_quit, title: str | None = None):
+    def __init__(
+        self, on_toggle, on_open, on_quit, title: str | None = None, on_auth=None
+    ):
         self._on_toggle = on_toggle
         self._on_open = on_open
         self._on_quit = on_quit
+        self._on_auth = on_auth
         self._title = title or APP_NAME
         self._status = core.STOPPED
         self._detail = ""
+        self._pending: list[str] = []
         self._revision = 1
         self._pixmap = icons.tray_pixmap(core.STOPPED, 22)
         self._connection: Gio.DBusConnection | None = None
@@ -183,8 +188,8 @@ class Tray:
         one missing.
 
         That failure mode is backwards for a VPN: "disconnected" is precisely
-        when the user needs to click it. State is carried by the icon's corner
-        dot, not by whether the icon exists.
+        when the user needs to click it. State is carried by the icon's colour,
+        not by whether the icon exists.
         """
         return "Active"
 
@@ -250,7 +255,23 @@ class Tray:
             ID_TOGGLE,
             "Disconnect" if self._status in core.LIVE_STATES else "Connect",
         )
-        return MenuItem(0, "", [toggle, MenuItem(ID_SEPARATOR, kind="separator"), MenuItem(ID_OPEN, f"Open {APP_NAME}"), MenuItem(ID_QUIT, "Quit")])
+        children = [toggle]
+        # Only present when the client actually reports a locked resource, so
+        # the menu stays two items in the common case.
+        if self._pending:
+            if len(self._pending) == 1:
+                label = f"Authenticate {self._pending[0]}…"
+            else:
+                label = f"Authenticate {len(self._pending)} resources…"
+            children.append(MenuItem(ID_AUTH, label))
+        children.extend(
+            [
+                MenuItem(ID_SEPARATOR, kind="separator"),
+                MenuItem(ID_OPEN, f"Open {APP_NAME}"),
+                MenuItem(ID_QUIT, "Quit"),
+            ]
+        )
+        return MenuItem(0, "", children)
 
     def _menu_prop_value(self, name: str):
         if name == "Version":
@@ -329,6 +350,9 @@ class Tray:
     def _dispatch(self, item_id: int) -> None:
         if item_id == ID_TOGGLE:
             self._on_toggle()
+        elif item_id == ID_AUTH:
+            if self._on_auth is not None:
+                self._on_auth()
         elif item_id == ID_OPEN:
             self._on_open()
         elif item_id == ID_QUIT:
@@ -392,7 +416,20 @@ class Tray:
     def set_status(self, status: core.Status) -> None:
         self._status = status.state
         self._detail = status.network or status.error or ""
-        self._pixmap = icons.tray_pixmap(status.state, 22)
+        self._repaint()
+
+    def set_pending(self, names: list[str]) -> None:
+        """Resources the client reports as locked, in the client's own words.
+
+        Separate from set_status because it comes from `twingate resources`,
+        not `twingate status`: the tunnel can be perfectly online while a
+        resource sits behind its own pending SSO round-trip.
+        """
+        self._pending = list(names)
+        self._repaint()
+
+    def _repaint(self) -> None:
+        self._pixmap = icons.tray_pixmap(self.icon_state, 22)
         self._revision += 1
         self._notify_icon()
         self._emit(
@@ -401,3 +438,15 @@ class Tray:
             "LayoutUpdated",
             GLib.Variant("(ui)", (self._revision, 0)),
         )
+
+    @property
+    def icon_state(self) -> str:
+        """Connected-but-locked is its own state, and amber is how it reads.
+
+        A green icon while traffic is still held is the one lie this app must
+        not tell: it is what makes "I'm connected, why is it not working?"
+        happen. Amber already means "waiting on you" for the auth flow.
+        """
+        if self._pending and self._status in core.LIVE_STATES:
+            return core.AUTHENTICATING
+        return self._status

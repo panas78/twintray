@@ -208,12 +208,28 @@ class Resource:
     auth_status: str = ""
     raw: str = ""
 
+    @property
+    def needs_auth(self) -> bool:
+        """True when the client reports an auth status for this resource.
+
+        Any non-empty AUTH STATUS means the resource is *locked* and its own SSO
+        round-trip has not completed — the client says "Pending", and its
+        binary carries "Authentication has not been completed for <name>".
+        Resources that are not locked leave the column blank.
+
+        Deliberately not an allow-list of words: the client is free to add
+        states ("Expired", ...) and guessing the set would silently hide them.
+        The raw word is shown in the UI so a new value is visible, not invisible.
+        """
+        return bool(self.auth_status.strip())
+
     def to_dict(self) -> dict:
         return {
             "name": self.name,
             "address": self.address,
             "alias": self.alias,
             "auth_status": self.auth_status,
+            "needs_auth": self.needs_auth,
         }
 
 
@@ -248,6 +264,16 @@ class ResourceList:
         if not statuses:
             return "not required by any resource"
         return ", ".join(statuses)
+
+    @property
+    def pending(self) -> list[Resource]:
+        """Resources whose own authentication has not been completed.
+
+        This is the "connected but still locked out" case: the tunnel is up and
+        `twingate status` says online, yet traffic to these resources is held
+        until their SSO round-trip finishes.
+        """
+        return [r for r in self.items if r.needs_auth]
 
 
 _HEADER_LINES = {"resource name", "main resources", "background resources", "resources"}
@@ -454,7 +480,48 @@ def disconnect(couple_tailscale: bool = False) -> ActionResult:
 
 
 def auth_flow(target: str) -> Run:
+    """Kick the SSO round-trip for one locked resource.
+
+    `twingate auth` prints a URL and waits (up to ~2 minutes) for the browser
+    hand-off to finish, so this blocks for as long as the user takes. Never call
+    it on the poll thread.
+    """
     return run([TWINGATE, "auth", target], timeout=120)
+
+
+def authenticate(target: str = "") -> ActionResult:
+    """Authenticate one resource, or every locked one when no name is given.
+
+    With no target, the resources are re-read first: the caller's snapshot may
+    be stale, and authenticating a resource that has since become unlocked
+    would pop a pointless browser window at the user. If nothing is locked this
+    succeeds without running anything — "nothing to do" is not a failure.
+    """
+    steps: list[str] = []
+    targets = [target.strip()] if target.strip() else []
+
+    if not targets:
+        listing = resources()
+        if listing.error:
+            return ActionResult(False, listing.error, steps)
+        targets = [r.name for r in listing.pending]
+        if not targets:
+            return ActionResult(True, "Nothing needs authenticating", steps)
+
+    failed: list[str] = []
+    for name in targets:
+        result = auth_flow(name)
+        steps.append(f"twingate auth {name}: {'ok' if result.ok else 'FAILED'}")
+        if not result.ok:
+            failed.append(name)
+
+    if failed:
+        return ActionResult(
+            False, f"Authentication failed for {', '.join(failed)}", steps
+        )
+    if len(targets) == 1:
+        return ActionResult(True, f"Authenticated {targets[0]}", steps)
+    return ActionResult(True, f"Authenticated {len(targets)} resources", steps)
 
 
 def reconnect() -> Run:

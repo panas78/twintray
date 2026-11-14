@@ -10,6 +10,7 @@ main thread via `GLib.idle_add`.
 from __future__ import annotations
 
 import threading
+import time
 from typing import Callable
 
 import gi
@@ -21,6 +22,11 @@ from gi.repository import Adw, Gio, GLib  # noqa: E402
 
 from . import APP_ID, APP_NAME, VERSION, core
 from .prefs import Prefs
+
+# Seconds between resource refreshes while connected. Short enough that a
+# resource dropping out of authentication is noticed while the user is still
+# wondering why it stopped working; long enough not to hammer the controller.
+RESOURCE_REFRESH = 15.0
 
 
 def run_async(work: Callable, on_success=None, on_error=None) -> None:
@@ -79,6 +85,18 @@ class Controller:
             on_success=lambda listing: self._after_resources(listing, then),
         )
 
+    def authenticate_async(self, target: str = "", on_result=None) -> None:
+        """Run the SSO round-trip off the main loop.
+
+        `twingate auth` blocks until the browser hand-off completes (or times
+        out at two minutes), so running it inline would freeze the icon and the
+        window for the whole duration.
+        """
+        run_async(
+            lambda: core.authenticate(target),
+            on_success=lambda result: self._after_auth(result, on_result),
+        )
+
     def _after_resources(self, listing: core.ResourceList, then) -> None:
         self._notify()
         if then is not None:
@@ -115,6 +133,18 @@ class Controller:
         if on_result is not None:
             on_result(result)
 
+    def _after_auth(self, result: core.ActionResult, on_result) -> None:
+        """Refresh the resources after an auth attempt, not just the status.
+
+        Authentication changes the AUTH STATUS column, not `twingate status`,
+        so re-polling the status alone would leave the icon amber and the
+        pending row populated after a successful login.
+        """
+        self.poll()
+        self.refresh_async()
+        if on_result is not None:
+            on_result(result)
+
     # ------------------------------------------------------------------ prefs
 
     def save_prefs(self, on_error, _previous=None) -> bool:
@@ -142,6 +172,7 @@ class TwinTrayApp(Adw.Application):
         self._tray_available = False
         self._last_state = None
         self._resources_requested = False
+        self._resources_loaded_at = 0.0
 
     # -------------------------------------------------------------- lifecycle
 
@@ -180,6 +211,7 @@ class TwinTrayApp(Adw.Application):
                 on_toggle=lambda: self.controller.toggle_async(),
                 on_open=self.show_window,
                 on_quit=self.quit_app,
+                on_auth=self.authenticate_async,
             )
             self._tray_available = self.tray.register(self.get_dbus_connection())
 
@@ -213,19 +245,27 @@ class TwinTrayApp(Adw.Application):
         self._maybe_load_resources(status)
 
     def _maybe_load_resources(self, status: core.Status) -> None:
-        """Fetch resources once per live session.
+        """Refresh resources while live, on a slower cadence than the poll.
 
-        The Authentication row is fed by the resources list, so without this it
-        stays empty until the user finds the Refresh button. Kept off the poll
-        itself: `twingate resources` is a network call and must not sit in front
-        of a status update.
+        The Authentication row and the pending-auth indicator are both fed by
+        the resources list, so one fetch per session is not enough: a resource
+        can fall out of authentication *after* a successful connect, and that is
+        exactly the case where the app must say so rather than keep showing
+        green.
+
+        Rate-limited because `twingate resources` is a network call and must not
+        sit in front of every status update.
         """
         if not status.live:
             self._resources_requested = False
+            self._resources_loaded_at = 0.0
             return
-        if self._resources_requested:
+
+        now = time.monotonic()
+        if self._resources_requested and now - self._resources_loaded_at < RESOURCE_REFRESH:
             return
         self._resources_requested = True
+        self._resources_loaded_at = now
         self.controller.refresh_async(then=self._sync_ui)
 
     def _notify_if_changed(self, status: core.Status) -> None:
@@ -253,6 +293,7 @@ class TwinTrayApp(Adw.Application):
             self.window.update(self.controller.status)
             self.window.update_resources(self.controller.resources)
         if self.tray is not None:
+            self.tray.set_pending([r.name for r in self.controller.resources.pending])
             self.tray.set_status(self.controller.status)
 
     def show_window(self) -> None:
