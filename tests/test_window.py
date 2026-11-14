@@ -375,3 +375,52 @@ def test_resources_loaded_after_status_also_refresh_the_auth_row(window):
     win.update_resources(controller.resources)
     assert win._auth_row.get_subtitle() == "Auth expires in 2 days"
     assert win._auth_row.get_subtitle() != before
+
+
+def test_the_app_actually_starts(monkeypatch):
+    """Construct the real app and run startup + activate.
+
+    This is the test that was missing when `on_auth=self.authenticate_async`
+    shipped: the method lived on the Controller, the attribute was read off the
+    App, and nothing failed until a real launch raised AttributeError inside
+    do_activate. Everything else stayed green, because no test ever
+    instantiated TwinTrayApp.
+
+    Polling, resources and the poll timer are stubbed so activation touches no
+    network, no bus watcher and no autostart state.
+    """
+    from twintray import app as app_mod
+
+    monkeypatch.setattr(
+        app_mod.Controller,
+        "poll",
+        lambda self: core.Status(state=core.STOPPED),
+    )
+    monkeypatch.setattr(
+        app_mod.Controller,
+        "load_resources",
+        lambda self: core.ResourceList(),
+    )
+    monkeypatch.setattr(app_mod.GLib, "timeout_add_seconds", lambda *a, **k: 0)
+
+    instance = app_mod.TwinTrayApp()
+    instance.register(None)
+    # GApplication::activate is a no-op until startup has run, and even then
+    # `activate()` does not dispatch to the vfunc outside a running main loop.
+    # do_startup() + do_activate() is the same pair a real launch performs, and
+    # do_activate is the method that was broken.
+    instance.do_startup()
+    instance.do_activate()
+
+    # The tray is the piece that was broken, so check the wiring it holds on
+    # to, not merely that an object exists.
+    assert instance.tray is not None
+    assert callable(instance.tray._on_auth)
+    assert callable(instance.tray._on_toggle)
+
+    called = []
+    instance.controller.authenticate_async = lambda *a, **k: called.append(True)
+    instance.on_authenticate()
+    assert called == [True]
+
+    instance.quit()

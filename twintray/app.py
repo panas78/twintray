@@ -211,7 +211,7 @@ class TwinTrayApp(Adw.Application):
                 on_toggle=lambda: self.controller.toggle_async(),
                 on_open=self.show_window,
                 on_quit=self.quit_app,
-                on_auth=self.authenticate_async,
+                on_auth=self.on_authenticate,
             )
             self._tray_available = self.tray.register(self.get_dbus_connection())
 
@@ -301,6 +301,16 @@ class TwinTrayApp(Adw.Application):
             return
         self.window.set_visible(True)
         self.window.present()
+
+    def on_authenticate(self) -> None:
+        """Tray → controller. Authentication names come from the last poll.
+
+        A method rather than passing `self.controller.authenticate_async`
+        straight to the Tray: the tray is built here, but the work belongs to
+        the controller, and routing it through one named entry point is what
+        makes it testable without a bus.
+        """
+        self.controller.authenticate_async()
 
     # ---------------------------------------------------------------- actions
 
