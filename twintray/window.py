@@ -397,16 +397,14 @@ class TwinTrayWindow(Adw.ApplicationWindow):
         self.controller.toggle_async()
 
     def _locked_resources(self) -> list[str]:
-        """Names of resources the client considers locked.
+        """Names of resources whose authorization is actually missing.
 
-        Only these can be authenticated: "locked" is the client's own term for a
-        resource needing a per-resource SSO round-trip, and the AUTH STATUS
-        column is the only place it shows. Filtering on it means the dropdown
-        can never offer a name that would do nothing.
+        Filtered on `needs_auth`, not on "the column is non-empty": an
+        authenticated resource reports "Auth expires in over a week", and
+        treating that as locked made the dropdown offer names that were already
+        fine.
         """
-        return [
-            r.name for r in self.controller.resources.items if r.auth_status and r.name
-        ]
+        return [r.name for r in self.controller.resources.items if r.needs_auth and r.name]
 
     def _rebuild_auth_options(self) -> None:
         """Re-sync the dropdown with the current resource list.

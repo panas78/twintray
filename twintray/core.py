@@ -209,19 +209,36 @@ class Resource:
     raw: str = ""
 
     @property
-    def needs_auth(self) -> bool:
-        """True when the client reports an auth status for this resource.
+    def auth_expires(self) -> str:
+        """How long this resource's authorization lasts, e.g. "over a week".
 
-        Any non-empty AUTH STATUS means the resource is *locked* and its own SSO
-        round-trip has not completed — the client says "Pending", and its
-        binary carries "Authentication has not been completed for <name>".
-        Resources that are not locked leave the column blank.
-
-        Deliberately not an allow-list of words: the client is free to add
-        states ("Expired", ...) and guessing the set would silently hide them.
-        The raw word is shown in the UI so a new value is visible, not invisible.
+        Empty when the client reports no expiry for it.
         """
-        return bool(self.auth_status.strip())
+        match = _EXPIRES_RE.search(self.auth_status)
+        return match.group(1).strip() if match else ""
+
+    @property
+    def needs_auth(self) -> bool:
+        """True only when this resource's authorization is actually missing.
+
+        The AUTH STATUS column has three shapes, and the first version of this
+        collapsed them into two, which made every authenticated resource look
+        locked:
+
+        * empty                          -- no per-resource auth configured
+        * "Auth expires in over a week"   -- authorized, with time left
+        * "Pending"                      -- locked, SSO not completed
+
+        So this is not "non-empty". It is "says something that is not an
+        expiry", which is deliberately not an allow-list of the word
+        "Pending": a status this code has never seen still surfaces rather than
+        being silently swallowed. An expiry means the opposite of locked, so it
+        is the one shape that can be ruled out by pattern.
+        """
+        status = self.auth_status.strip()
+        if not status:
+            return False
+        return self.auth_expires == ""
 
     def to_dict(self) -> dict:
         return {
@@ -229,6 +246,7 @@ class Resource:
             "address": self.address,
             "alias": self.alias,
             "auth_status": self.auth_status,
+            "auth_expires": self.auth_expires,
             "needs_auth": self.needs_auth,
         }
 

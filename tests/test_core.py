@@ -122,13 +122,63 @@ def test_an_unlocked_listing_has_nothing_pending():
     assert listing.pending == []
 
 
-def test_any_auth_status_counts_as_locked():
-    # Not an allow-list of words: a status this code has never seen must still
-    # be surfaced, or a new client state silently disappears.
+# Verbatim from `twingate resources -d` AFTER the SSO flow completed. The
+# column does not go blank — it reports the remaining validity.
+AUTHORIZED_RESOURCES = (
+    "RESOURCE NAME         \tADDRESS       \tALIAS\tAUTH STATUS\n"
+    "*.diastasys.gr        \t*.diastasys.gr\t-    \tAuth expires in over a week\n"
+    "Diastasys Internal LAN\t10.10.0.0/24  \t-    \tAuth expires in over a week\n"
+    "\n"
+)
+
+
+def test_a_pending_resource_needs_auth():
     assert core.Resource("x", auth_status="Pending").needs_auth
+
+
+def test_an_authorized_resource_does_not_need_auth():
+    """The bug Pan caught: an expiry statement is the OPPOSITE of locked."""
+    locked = core.Resource("x", auth_status="Auth expires in over a week")
+    assert locked.needs_auth is False
+    assert locked.auth_expires == "over a week"
+
+
+def test_an_unknown_status_still_surfaces_as_needing_auth():
+    # Not an allow-list of the word "Pending": a state this code has never seen
+    # must appear, not vanish.
     assert core.Resource("x", auth_status="Expired").needs_auth
+    assert core.Resource("x", auth_status="Something new").needs_auth
+
+
+def test_no_auth_status_at_all_is_not_locked():
     assert not core.Resource("x", auth_status="").needs_auth
     assert not core.Resource("x", auth_status="   ").needs_auth
+
+
+def test_authorized_listing_has_nothing_pending():
+    listing = core.ResourceList(items=core.parse_resources(AUTHORIZED_RESOURCES))
+    assert listing.pending == []
+    assert [r.auth_expires for r in listing.items] == ["over a week", "over a week"]
+
+
+def test_authorized_listing_still_shows_its_expiry():
+    listing = core.ResourceList(items=core.parse_resources(AUTHORIZED_RESOURCES))
+    assert "Auth expires" in listing.auth_summary
+
+
+def test_authenticate_is_a_noop_once_everything_is_authorized(monkeypatch):
+    calls: list[list[str]] = []
+
+    def fake_run(args, timeout=None):
+        calls.append(args)
+        return core.Run(True, 0, AUTHORIZED_RESOURCES, "")
+
+    monkeypatch.setattr(core, "run", fake_run)
+    result = core.authenticate()
+
+    assert result.ok is True
+    assert result.message == "Nothing needs authenticating"
+    assert [c for c in calls if "auth" in c] == []
 
 
 def test_authenticate_runs_the_flow_for_each_locked_resource(monkeypatch):

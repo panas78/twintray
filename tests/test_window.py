@@ -207,7 +207,9 @@ def test_auth_target_dropdown_offers_only_resources_that_need_auth(window):
     controller.prefs.auth_target = ""
     controller.resources = core.ResourceList(
         items=[
-            core.Resource("locked-one", "10.0.0.1", auth_status="Auth expires in 6 days"),
+            # Authorized, with time left. Offering this would open a browser tab
+            # that does nothing, which is the bug Pan caught on the real client.
+            core.Resource("authorized-one", "10.0.0.1", auth_status="Auth expires in 6 days"),
             core.Resource("needs-nothing", "10.0.0.2"),
             core.Resource("also-locked", "10.0.0.3", auth_status="Pending authentication"),
         ]
@@ -216,8 +218,8 @@ def test_auth_target_dropdown_offers_only_resources_that_need_auth(window):
 
     model = win._auth_target_row.get_model()
     labels = [model.get_string(i) for i in range(model.get_n_items())]
-    # "None" first, then the two that would actually do something.
-    assert labels == ["None", "locked-one", "also-locked"]
+    # "None" first, then only the one that would actually do something.
+    assert labels == ["None", "also-locked"]
 
 
 def test_auth_target_selection_is_persisted(window):

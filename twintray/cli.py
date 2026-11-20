@@ -65,7 +65,9 @@ def cmd_resources(args) -> int:
     width = max(len(item.name) for item in listing.items)
     for item in listing.items:
         line = f"{item.name:<{width}}  {item.address}" if item.address else item.name
-        if item.needs_auth:
+        # Show whatever the client said, not only the locked case: "Auth expires
+        # in over a week" is the reassurance that nothing needs doing.
+        if item.auth_status:
             line += f"  [{item.auth_status}]"
         print(line)
     return 0
